@@ -21,3 +21,4 @@ uvicorn==0.52.4
 paddlepaddle==3.0.0
 paddleocr==3.0.3
 paddlex==3.0.3
+langchain==0.3.27
