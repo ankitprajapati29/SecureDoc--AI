@@ -799,16 +799,16 @@ def get_paddle_ocr():
         return None
 
     try:
-        try:
-            _PADDLE_ENGINE = PaddleOCR(
-                lang="en",
-                use_doc_orientation_classify=False,
-                use_doc_unwarping=False,
-                use_textline_orientation=False,
-            )
-        except TypeError:
-            _PADDLE_ENGINE = PaddleOCR(lang="en")
+        _PADDLE_ENGINE = PaddleOCR(
+            lang="en",
+            text_detection_model_name="PP-OCRv5_mobile_det",
+            text_recognition_model_name="PP-OCRv5_mobile_rec",
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+        )
         return _PADDLE_ENGINE
+
     except Exception as error:
         _PADDLE_ENGINE_ERROR = str(error)
         print("PADDLEOCR INITIALIZATION ERROR:", _PADDLE_ENGINE_ERROR)
