@@ -10,7 +10,7 @@ document.addEventListener("DOMContentLoaded", () => {
        CONFIG
     ====================================================== */
 
-    const API_BASE = const API_BASE = "https://securedoc-ai-t5m0.onrender.com";
+    const API_BASE = "https://securedoc-ai-t5m0.onrender.com";
     const UPLOAD_ENDPOINT =
         `${API_BASE}/upload`;
 
