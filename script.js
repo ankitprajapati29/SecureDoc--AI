@@ -2197,11 +2197,22 @@ Waiting for OCR analysis...</pre>
 
 
         analysisRunning =
-            true;
+    true;
 
+// Lock file selection while analysis is running
+if (documentInput) {
+    documentInput.disabled = true;
+}
 
-        if (analyzeButton) {
+if (uploadBox) {
+    uploadBox.classList.add("upload-locked");
+}
 
+if (removeFile) {
+    removeFile.disabled = true;
+}
+
+if (analyzeButton) {
             analyzeButton.disabled =
                 true;
 
@@ -2483,12 +2494,23 @@ Please check:
 
         } finally {
 
-            analysisRunning =
-                false;
+    analysisRunning =
+        false;
 
+    // Unlock file selection after analysis finishes
+    if (documentInput) {
+        documentInput.disabled = false;
+    }
 
-            if (analyzeButton) {
+    if (uploadBox) {
+        uploadBox.classList.remove("upload-locked");
+    }
 
+    if (removeFile) {
+        removeFile.disabled = false;
+    }
+
+    if (analyzeButton) { 
                 analyzeButton.disabled =
                     false;
 
@@ -2520,12 +2542,16 @@ Please check:
 
                 setTimeout(() => {
 
-                    if (documentInput) {
+    if (analysisRunning) {
+        return;
+    }
 
-                        documentInput.click();
-                    }
+    if (documentInput) {
 
-                }, 400);
+        documentInput.click();
+    }
+
+}, 400);
             }
         );
     }
@@ -2538,16 +2564,19 @@ Please check:
     if (uploadBox) {
 
         uploadBox.addEventListener(
-            "click",
-            () => {
+    "click",
+    () => {
 
-                if (documentInput) {
+        if (analysisRunning) {
+            return;
+        }
 
-                    documentInput.click();
-                }
-            }
-        );
+        if (documentInput) {
 
+            documentInput.click();
+        }
+    }
+);
 
         /* DRAG ENTER + OVER */
 
