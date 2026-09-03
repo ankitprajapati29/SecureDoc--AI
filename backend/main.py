@@ -3393,160 +3393,143 @@ def build_field_consensus(
 
 
 # ============================================================
-# ACCURACY-FIRST MULTI-PASS OCR ENGINE
+# TESSERACT-ONLY LIGHTWEIGHT OCR ENGINE
+# Optimized for Render Free / low-memory servers
 # ============================================================
 
 def extract_ocr_data(image):
     """
-    Fast-path OCR:
-    1) PaddleOCR on the best original variant first.
-    2) If the result is already readable and the document is identified,
-       stop there.
-    3) Only weak/unknown documents trigger enhanced PaddleOCR and
-       Tesseract fallback passes.
+    Lightweight Tesseract-only OCR.
+
+    Pass 1:
+        Original, orientation-fixed, resized image using PSM 6.
+
+    Pass 2:
+        Same image using PSM 11 if the first result is weak.
+
+    No PaddleOCR is used here.
     """
+
     language = get_ocr_language()
-    variants = create_ocr_variants(image)
     candidates = []
 
-    def add_candidate(result, variant_name, engine_name):
-        text = normalize_text(result.get("text", ""))
-        if not text:
-            return
-        result["variant"] = f"{engine_name}_{variant_name}"
-        result["engine"] = engine_name
-        result["score"] = text_quality_score(
-            text,
-            result.get("confidence", 0),
-        )
-        detection = detect_document_type(text)
-        result["detection"] = detection
-        result["structured"] = extract_fields_from_text(
-            text,
-            detection,
-        )
-        candidates.append(result)
-
     try:
-        variant_map = {name: item for name, item in variants}
-        original_image = variant_map.get(
-            "original",
-            variants[0][1] if variants else image,
+        # Prepare only ONE OCR image to keep RAM usage low.
+        original_image = fix_orientation(
+            image
+        ).convert(
+            "RGB"
         )
 
-        # Fast primary pass: one strong engine, one original image.
+        original_image = resize_for_ocr(
+            original_image
+        )
+
+        def add_candidate(result, variant_name, config):
+            text = normalize_text(
+                result.get("text", "")
+            )
+
+            if not text:
+                return
+
+            result["variant"] = variant_name
+            result["engine"] = "tesseract"
+
+            result["score"] = text_quality_score(
+                text,
+                result.get("confidence", 0),
+            )
+
+            detection = detect_document_type(
+                text
+            )
+
+            result["detection"] = detection
+
+            result["structured"] = extract_fields_from_text(
+                text,
+                detection,
+            )
+
+            candidates.append(
+                result
+            )
+
+        # ----------------------------------------------------
+        # PASS 1 - Normal document layout
+        # ----------------------------------------------------
+        result = run_ocr_pass(
+            original_image,
+            "--oem 3 --psm 6",
+            language,
+        )
+
         add_candidate(
-            run_paddle_ocr_pass(original_image),
-            "original",
-            "paddle",
+            result,
+            "original_psm6",
+            "--oem 3 --psm 6",
         )
 
-        best_primary = max(
+        # ----------------------------------------------------
+        # PASS 2 - Sparse text fallback
+        # Only run if first result is weak.
+        # ----------------------------------------------------
+        best = max(
             candidates,
             key=lambda item: item.get("score", -999),
             default=None,
         )
 
-        primary_confidence = (
-            float(best_primary.get("confidence", 0) or 0)
-            if best_primary
+        confidence = (
+            float(
+                best.get("confidence", 0) or 0
+            )
+            if best
             else 0.0
         )
-        primary_category = (
-            best_primary.get("detection", {}).get(
+
+        category = (
+            best.get("detection", {}).get(
                 "document_category",
                 "UNKNOWN",
             )
-            if best_primary
+            if best
             else "UNKNOWN"
         )
 
-        # Good clear documents return from the fast path. Difficult,
-        # low-confidence, or unknown documents automatically receive
-        # the original multi-engine fallback.
-        needs_fallback = (
-            best_primary is None
-            or primary_confidence < 72
-            or primary_category == "UNKNOWN"
+        if (
+            best is None
+            or confidence < 70
+            or category == "UNKNOWN"
+        ):
+            result = run_ocr_pass(
+                original_image,
+                "--oem 3 --psm 11",
+                language,
+            )
+
+            add_candidate(
+                result,
+                "original_psm11",
+                "--oem 3 --psm 11",
+            )
+
+    except Exception as error:
+        print(
+            "TESSERACT OCR PIPELINE ERROR:",
+            str(error),
         )
 
-        if needs_fallback:
-            enhanced_candidates = [
-                item
-                for item in variants
-                if item[0] in {"enhanced_gray", "otsu"}
-            ][:2]
-
-            for variant_name, variant_image in enhanced_candidates:
-                add_candidate(
-                    run_paddle_ocr_pass(variant_image),
-                    variant_name,
-                    "paddle",
-                )
-
-            # Tesseract is now an accuracy fallback instead of running
-            # on every clear document.
-            fallback_targets = [("original", original_image)]
-            if enhanced_candidates:
-                fallback_targets.append(enhanced_candidates[0])
-
-            for variant_name, variant_image in fallback_targets:
-                for config in ["--oem 3 --psm 6", "--oem 3 --psm 11"]:
-                    result = run_ocr_pass(
-                        variant_image,
-                        config,
-                        language,
-                    )
-                    add_candidate(
-                        result,
-                        f"{variant_name}_psm{config.split()[-1]}",
-                        "tesseract",
-                    )
-
-            best_primary = max(
-                candidates,
-                key=lambda item: item.get("score", -999),
-                default=None,
-            )
-
-            still_weak = (
-                best_primary is None
-                or float(best_primary.get("confidence", 0) or 0) < 60
-                or best_primary.get("detection", {}).get(
-                    "document_category"
-                ) == "UNKNOWN"
-            )
-
-            if still_weak:
-                used_names = {"original"} | {
-                    name for name, _ in enhanced_candidates
-                }
-                extra_variants = [
-                    item for item in variants
-                    if item[0] not in used_names
-                ][:2]
-
-                for variant_name, variant_image in extra_variants:
-                    add_candidate(
-                        run_paddle_ocr_pass(variant_image),
-                        variant_name,
-                        "paddle",
-                    )
-                    result = run_ocr_pass(
-                        variant_image,
-                        "--oem 3 --psm 12",
-                        language,
-                    )
-                    add_candidate(
-                        result,
-                        f"{variant_name}_psm12",
-                        "tesseract",
-                    )
-
     finally:
-        for _, variant_image in variants:
-            safe_close(variant_image)
+        try:
+            original_image.close()
+        except Exception:
+            pass
 
+    # --------------------------------------------------------
+    # No OCR text
+    # --------------------------------------------------------
     if not candidates:
         return {
             "extracted_text": "",
@@ -3563,6 +3546,9 @@ def extract_ocr_data(image):
             "candidate_summary": [],
         }
 
+    # --------------------------------------------------------
+    # Rank OCR candidates
+    # --------------------------------------------------------
     candidates.sort(
         key=lambda item: (
             item.get("score", -999),
@@ -3571,30 +3557,54 @@ def extract_ocr_data(image):
         reverse=True,
     )
 
+    # --------------------------------------------------------
+    # Combine unique OCR text
+    # --------------------------------------------------------
     combined_parts = []
     seen = set()
+
     for candidate in candidates:
-        candidate_text = normalize_text(candidate.get("text", ""))
-        key = compact_text(candidate_text)[:3000].lower()
+        candidate_text = normalize_text(
+            candidate.get("text", "")
+        )
+
+        key = compact_text(
+            candidate_text
+        )[:3000].lower()
+
         if key and key not in seen:
             seen.add(key)
-            combined_parts.append(candidate_text)
+            combined_parts.append(
+                candidate_text
+            )
 
-    combined_text = normalize_text("\n\n".join(combined_parts))
-    final_detection = detect_document_type(combined_text)
+    combined_text = normalize_text(
+        "\n\n".join(combined_parts)
+    )
 
+    final_detection = detect_document_type(
+        combined_text
+    )
+
+    # --------------------------------------------------------
+    # Re-extract structured fields using final detection
+    # --------------------------------------------------------
     for candidate in candidates:
         candidate["structured"] = extract_fields_from_text(
             candidate.get("text", ""),
             final_detection,
         )
 
+    # --------------------------------------------------------
+    # Field consensus
+    # --------------------------------------------------------
     structured_data, field_confidence = build_field_consensus(
         candidates,
         final_detection,
     )
 
     best = candidates[0]
+
     raw_ocr_text = normalize_text(
         best.get("text", "")
     )[:MAX_OCR_TEXT_LENGTH]
@@ -3605,7 +3615,9 @@ def extract_ocr_data(image):
             "engine": candidate.get("engine"),
             "confidence": candidate.get("confidence"),
             "score": candidate.get("score"),
-            "document": final_detection.get("document_label"),
+            "document": final_detection.get(
+                "document_label"
+            ),
         }
         for candidate in candidates[:8]
     ]
@@ -3613,10 +3625,16 @@ def extract_ocr_data(image):
     return {
         "extracted_text": raw_ocr_text,
         "raw_ocr_text": raw_ocr_text,
-        "ocr_confidence": float(best.get("confidence", 0) or 0),
-        "ocr_status": "TEXT_DETECTED" if raw_ocr_text else "NO_TEXT_DETECTED",
+        "ocr_confidence": float(
+            best.get("confidence", 0) or 0
+        ),
+        "ocr_status": (
+            "TEXT_DETECTED"
+            if raw_ocr_text
+            else "NO_TEXT_DETECTED"
+        ),
         "ocr_language": language,
-        "ocr_engine": best.get("engine", "UNKNOWN"),
+        "ocr_engine": "tesseract",
         "ocr_variant": best.get("variant"),
         "ocr_candidates_tested": len(candidates),
         "document_detection": final_detection,
