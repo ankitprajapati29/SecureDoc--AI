@@ -103,10 +103,8 @@ MAX_OCR_TEXT_LENGTH = 25000
 
 MAX_PDF_OCR_PAGES = 5
 
-OCR_TARGET_WIDTH = 2600
-
-OCR_MAX_DIMENSION = 4500
-
+OCR_TARGET_WIDTH = 2000
+OCR_MAX_DIMENSION = 3200
 
 # ============================================================
 # DOCUMENT LABELS
@@ -3392,34 +3390,23 @@ def build_field_consensus(
     )
 
 
-# ============================================================
-# TESSERACT-ONLY LIGHTWEIGHT OCR ENGINE
-# Optimized for Render Free / low-memory servers
-# ============================================================
-
 def extract_ocr_data(image):
     """
-    Lightweight Tesseract-only OCR.
+    Fast and reliable Tesseract OCR for low-memory deployment.
 
-    Pass 1:
-        Original, orientation-fixed, resized image using PSM 6.
-
-    Pass 2:
-        Same image using PSM 11 if the first result is weak.
-
-    No PaddleOCR is used here.
+    Uses one primary OCR pass first.
+    A second PSM 11 pass is used only when the first result
+    is clearly weak or document type is unknown.
     """
 
     language = get_ocr_language()
     candidates = []
 
     try:
-        # Prepare only ONE OCR image to keep RAM usage low.
+        # Prepare ONE OCR image only
         original_image = fix_orientation(
             image
-        ).convert(
-            "RGB"
-        )
+        ).convert("RGB")
 
         original_image = resize_for_ocr(
             original_image
@@ -3452,12 +3439,10 @@ def extract_ocr_data(image):
                 detection,
             )
 
-            candidates.append(
-                result
-            )
+            candidates.append(result)
 
         # ----------------------------------------------------
-        # PASS 1 - Normal document layout
+        # PASS 1 - Standard document OCR
         # ----------------------------------------------------
         result = run_ocr_pass(
             original_image,
@@ -3472,8 +3457,7 @@ def extract_ocr_data(image):
         )
 
         # ----------------------------------------------------
-        # PASS 2 - Sparse text fallback
-        # Only run if first result is weak.
+        # Check first result
         # ----------------------------------------------------
         best = max(
             candidates,
@@ -3498,9 +3482,12 @@ def extract_ocr_data(image):
             else "UNKNOWN"
         )
 
+        # ----------------------------------------------------
+        # PASS 2 - Only when really necessary
+        # ----------------------------------------------------
         if (
             best is None
-            or confidence < 70
+            or confidence < 55
             or category == "UNKNOWN"
         ):
             result = run_ocr_pass(
@@ -3558,36 +3545,16 @@ def extract_ocr_data(image):
     )
 
     # --------------------------------------------------------
-    # Combine unique OCR text
+    # Final document detection
     # --------------------------------------------------------
-    combined_parts = []
-    seen = set()
-
-    for candidate in candidates:
-        candidate_text = normalize_text(
-            candidate.get("text", "")
-        )
-
-        key = compact_text(
-            candidate_text
-        )[:3000].lower()
-
-        if key and key not in seen:
-            seen.add(key)
-            combined_parts.append(
-                candidate_text
-            )
-
-    combined_text = normalize_text(
-        "\n\n".join(combined_parts)
-    )
+    best = candidates[0]
 
     final_detection = detect_document_type(
-        combined_text
+        best.get("text", "")
     )
 
     # --------------------------------------------------------
-    # Re-extract structured fields using final detection
+    # Re-extract structured fields
     # --------------------------------------------------------
     for candidate in candidates:
         candidate["structured"] = extract_fields_from_text(
@@ -3602,8 +3569,6 @@ def extract_ocr_data(image):
         candidates,
         final_detection,
     )
-
-    best = candidates[0]
 
     raw_ocr_text = normalize_text(
         best.get("text", "")
