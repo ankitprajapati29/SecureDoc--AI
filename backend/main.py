@@ -21,6 +21,22 @@ from collections import Counter, defaultdict
 import pytesseract
 
 # ============================================================
+# OPTIONAL PADDLEOCR SUPPORT
+# ============================================================
+
+try:
+    from paddleocr import PaddleOCR
+    PADDLE_AVAILABLE = True
+except Exception as paddle_import_error:
+    PaddleOCR = None
+    PADDLE_AVAILABLE = False
+    print("PADDLEOCR IMPORT ERROR:", str(paddle_import_error))
+
+_PADDLE_ENGINE = None
+_PADDLE_ENGINE_ERROR = None
+
+
+# ============================================================
 # OPTIONAL OPENCV SUPPORT
 # ============================================================
 
@@ -87,8 +103,8 @@ MAX_OCR_TEXT_LENGTH = 25000
 
 MAX_PDF_OCR_PAGES = 5
 
-OCR_TARGET_WIDTH = 1600
-OCR_MAX_DIMENSION = 2400
+OCR_TARGET_WIDTH = 2000
+OCR_MAX_DIMENSION = 3200
 
 # ============================================================
 # DOCUMENT LABELS
@@ -762,6 +778,196 @@ def analyze_image_quality(image):
         ),
         "issues": issues,
     }
+
+
+# ============================================================
+# PADDLEOCR ENGINE (PRIMARY ACCURACY LAYER)
+# ============================================================
+
+def get_paddle_ocr():
+    global _PADDLE_ENGINE, _PADDLE_ENGINE_ERROR
+
+    if not PADDLE_AVAILABLE:
+        return None
+
+    if _PADDLE_ENGINE is not None:
+        return _PADDLE_ENGINE
+
+    if _PADDLE_ENGINE_ERROR is not None:
+        return None
+
+    try:
+        _PADDLE_ENGINE = PaddleOCR(
+            lang="en",
+            text_detection_model_name="PP-OCRv5_mobile_det",
+            text_recognition_model_name="PP-OCRv5_mobile_rec",
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+        )
+        return _PADDLE_ENGINE
+
+    except Exception as error:
+        _PADDLE_ENGINE_ERROR = str(error)
+        print("PADDLEOCR INITIALIZATION ERROR:", _PADDLE_ENGINE_ERROR)
+        return None
+
+
+def _paddle_to_python(value):
+    try:
+        if hasattr(value, "json"):
+            json_value = value.json
+            if callable(json_value):
+                json_value = json_value()
+            if isinstance(json_value, str):
+                import json
+                return json.loads(json_value)
+            return json_value
+    except Exception:
+        pass
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_paddle_to_python(item) for item in value]
+    return value
+
+
+def _extract_paddle_pairs(value):
+    pairs = []
+
+    def walk(item):
+        item = _paddle_to_python(item)
+        if isinstance(item, dict):
+            texts = (
+                item.get("rec_texts")
+                or item.get("texts")
+                or item.get("text")
+            )
+            scores = (
+                item.get("rec_scores")
+                or item.get("scores")
+                or item.get("score")
+            )
+            if isinstance(texts, str):
+                texts = [texts]
+            if texts:
+                if not isinstance(scores, (list, tuple)):
+                    scores = [scores] * len(texts)
+                for text, score in zip(texts, scores):
+                    clean = clean_ocr_token(str(text))
+                    if not clean:
+                        continue
+                    try:
+                        confidence = float(score)
+                        if confidence <= 1:
+                            confidence *= 100
+                    except Exception:
+                        confidence = 0.0
+                    pairs.append((clean, confidence))
+                return
+            for nested in item.values():
+                if isinstance(nested, (dict, list, tuple)):
+                    walk(nested)
+            return
+
+        if isinstance(item, (list, tuple)):
+            # Legacy PaddleOCR output: [box, (text, confidence)]
+            if (
+                len(item) >= 2
+                and isinstance(item[1], (list, tuple))
+                and len(item[1]) >= 2
+                and isinstance(item[1][0], str)
+            ):
+                clean = clean_ocr_token(item[1][0])
+                if clean:
+                    try:
+                        confidence = float(item[1][1])
+                        if confidence <= 1:
+                            confidence *= 100
+                    except Exception:
+                        confidence = 0.0
+                    pairs.append((clean, confidence))
+                return
+            for nested in item:
+                walk(nested)
+
+    walk(value)
+    return pairs
+
+
+def run_paddle_ocr_pass(image):
+    engine = get_paddle_ocr()
+    if engine is None:
+        return {
+            "text": "",
+            "lines": [],
+            "tokens": [],
+            "confidence": 0.0,
+        }
+
+    try:
+        rgb = image.convert("RGB")
+        array = np.ascontiguousarray(np.asarray(rgb)) if CV2_AVAILABLE else None
+
+        if hasattr(engine, "predict"):
+            result = engine.predict(array if array is not None else rgb)
+        elif hasattr(engine, "ocr"):
+            result = engine.ocr(array if array is not None else rgb, cls=True)
+        else:
+            raise RuntimeError("Installed PaddleOCR API does not expose predict() or ocr().")
+
+        pairs = _extract_paddle_pairs(result)
+        lines = []
+        tokens = []
+        confidences = []
+
+        for index, (text, confidence) in enumerate(pairs):
+            if not text:
+                continue
+            lines.append({
+                "text": text,
+                "confidence": confidence,
+                "left": 0,
+                "top": index,
+                "width": 0,
+                "height": 0,
+            })
+            tokens.append({
+                "text": text,
+                "confidence": confidence,
+                "left": 0,
+                "top": index,
+                "width": 0,
+                "height": 0,
+                "block": 0,
+                "paragraph": 0,
+                "line": index,
+            })
+            if confidence >= 0:
+                confidences.append(confidence)
+
+        text = normalize_text("\n".join(item["text"] for item in lines))
+        confidence = (
+            sum(confidences) / len(confidences)
+            if confidences
+            else 0.0
+        )
+
+        return {
+            "text": text,
+            "lines": lines,
+            "tokens": tokens,
+            "confidence": round(confidence, 2),
+        }
+
+    except Exception as error:
+        print("PADDLEOCR ERROR:", str(error))
+        return {
+            "text": "",
+            "lines": [],
+            "tokens": [],
+            "confidence": 0.0,
+        }
 
 
 # ============================================================
@@ -2313,187 +2519,431 @@ def extract_name_from_text(text):
         return None
 
     lines = split_clean_lines(text)
-    if not lines:
-        return None
 
-    # --------------------------------------------------------
-    # Strong name cleaner. OCR often adds punctuation or field
-    # labels, so clean only the value and reject document text.
-    # --------------------------------------------------------
+    # ========================================================
+    # NAME CLEANER
+    # ========================================================
+
     def clean_name_candidate(value):
+
         if not value:
             return None
 
         value = str(value).strip()
+
+        # Remove common field labels accidentally included
         value = re.sub(
-            r"(?i)^(?:name|full\s*name|name\s*of\s*(?:holder|applicant|person)|card\s*holder|cardholder|surname|nom|given\s*names?|given\s*name|forenames?|pr[eé]noms?)\s*[:.\-]?\s*",
+            r"(?i)^(?:name|full\s+name|surname|nom|given\s+names?|prenoms?|pr[eé]noms?)\s*[:.\-]?\s*",
             "",
             value,
         )
+
+        # Remove relation data
         value = re.sub(
             r"(?i)\b(?:s/o|d/o|w/o|c/o|son\s+of|daughter\s+of|wife\s+of)\b.*",
             "",
             value,
         )
-        value = value.strip(" :-|,.;")
+
+        value = value.strip(
+            " :-|,.;"
+        )
+
         value = normalize_name(value)
-        if not value or not is_valid_name(value):
+
+        if not value:
+            return None
+
+        if not is_valid_name(value):
             return None
 
         lower = value.lower()
-        blocked = {
-            "passport", "issuing country", "issuing authority", "country",
-            "nationality", "authority", "government", "department",
-            "transport", "licence to drive", "license to drive",
-            "authorisation", "authorization", "date of birth", "date of issue",
-            "date of expiry", "date of expiration", "place of birth", "sex",
-            "gender", "signature", "holder", "address", "validity", "valid till",
-            "valid until", "passport no", "licence no", "license no", "document",
-            "identity card", "permanent account number", "income tax department",
-            "election commission", "elector", "blood group", "date of issue",
-        }
-        if any(phrase in lower for phrase in blocked):
+
+        # ====================================================
+        # NEVER ACCEPT THESE AS PERSON NAME
+        # ====================================================
+
+        blocked_phrases = [
+            "passport",
+            "issuing country",
+            "issuing count",
+            "issuing authority",
+            "country",
+            "nationality",
+            "authority",
+            "government",
+            "department",
+            "transport",
+            "licence to drive",
+            "license to drive",
+            "authorisation",
+            "authorization",
+            "authorisation to drive",
+            "authorization to drive",
+            "date of birth",
+            "date of issue",
+            "date of expiry",
+            "date of expiration",
+            "place of birth",
+            "sex",
+            "gender",
+            "signature",
+            "holder",
+            "address",
+            "validity",
+            "valid till",
+            "valid until",
+            "passport no",
+            "licence no",
+            "license no",
+            "document",
+            "identity card",
+        ]
+
+        for phrase in blocked_phrases:
+
+            if phrase in lower:
+                return None
+
+        # Reject obvious numbers inside name
+        if re.search(
+            r"\d",
+            value,
+        ):
             return None
-        if re.search(r"\d", value):
+
+        words = value.split()
+
+        # Too short
+        if len(words) == 0:
             return None
-        if len(value.split()) > 6:
+
+        # Too long = probably a sentence
+        if len(words) > 6:
             return None
+
         return value
 
-    # --------------------------------------------------------
-    # 1. PASSPORT / INTERNATIONAL DOCUMENTS
-    # OCR can return bilingual labels. Always combine Given Names
-    # + Surname when both are available.
-    # --------------------------------------------------------
+    # ========================================================
+    # PASSPORT PRIORITY
+    #
+    # Surname/Nom      MARTIN
+    # Given names      SARAH
+    #
+    # Final result:
+    # SARAH MARTIN
+    # ========================================================
+
     surname = None
     given_name = None
 
-    surname_re = re.compile(
-        r"(?i)^(?:surname|nom)\s*[:.\-]?\s*(.*)$"
-    )
-    given_re = re.compile(
-        r"(?i)^(?:given\s*names?|given\s*name|forenames?|pr[eé]noms?)\s*[:.\-]?\s*(.*)$"
+    surname_pattern = re.compile(
+        r"(?i)"
+        r"(?:surname|nom)"
+        r"\s*[:.\-]?\s*"
+        r"(.*)$"
     )
 
-    for i, line in enumerate(lines):
-        m = surname_re.search(line.strip())
-        if m:
-            value = clean_name_candidate(m.group(1))
-            if not value and i + 1 < len(lines):
-                value = clean_name_candidate(lines[i + 1])
+    given_pattern = re.compile(
+        r"(?i)"
+        r"(?:"
+        r"given\s*names?"
+        r"|given\s*name"
+        r"|pr[eé]noms?"
+        r")"
+        r"\s*[:.\-]?\s*"
+        r"(.*)$"
+    )
+
+    for index, line in enumerate(lines):
+
+        # -------------------------------
+        # PASSPORT SURNAME
+        # -------------------------------
+
+        surname_match = surname_pattern.search(
+            line
+        )
+
+        if surname_match:
+
+            value = clean_name_candidate(
+                surname_match.group(1)
+            )
+
+            # Label may be on one line,
+            # value on next line
+            if (
+                not value
+                and index + 1 < len(lines)
+            ):
+
+                value = clean_name_candidate(
+                    lines[index + 1]
+                )
+
             if value:
                 surname = value
 
-        m = given_re.search(line.strip())
-        if m:
-            value = clean_name_candidate(m.group(1))
-            if not value and i + 1 < len(lines):
-                value = clean_name_candidate(lines[i + 1])
+        # -------------------------------
+        # PASSPORT GIVEN NAME
+        # -------------------------------
+
+        given_match = given_pattern.search(
+            line
+        )
+
+        if given_match:
+
+            value = clean_name_candidate(
+                given_match.group(1)
+            )
+
+            # Label may be on one line,
+            # value on next line
+            if (
+                not value
+                and index + 1 < len(lines)
+            ):
+
+                value = clean_name_candidate(
+                    lines[index + 1]
+                )
+
             if value:
                 given_name = value
 
+    # Passport final priority:
+    # SARAH + MARTIN
     if given_name and surname:
-        full = clean_name_candidate(f"{given_name} {surname}")
-        if full:
-            return full
+
+        full_name = clean_name_candidate(
+            f"{given_name} {surname}"
+        )
+
+        if full_name:
+            return full_name
+
     if given_name:
         return given_name
+
     if surname:
         return surname
 
-    # --------------------------------------------------------
-    # 2. EXPLICIT NAME LABEL — strongest universal signal
-    # Supports same-line and next-line layouts, including OCR
-    # variants such as NAME:, NAME -, FULL NAME, etc.
-    # --------------------------------------------------------
-    explicit_re = re.compile(
-        r"(?i)^(?:name|full\s*name|name\s*of\s*(?:holder|applicant|person)|cardholder|card\s*holder)\s*[:.\-]?\s*(.*)$"
+    # ========================================================
+    # UNIVERSAL EXPLICIT NAME FIELD
+    #
+    # PAN:
+    # Name
+    # ANKIT KUMAR
+    #
+    # DL:
+    # Name : ANURAG BREJA
+    #
+    # Aadhaar:
+    # Name
+    # XYZ
+    # ========================================================
+
+    explicit_name_pattern = re.compile(
+        r"(?i)"
+        r"^(?:"
+        r"name"
+        r"|full\s*name"
+        r"|name\s*of\s*(?:holder|applicant|person)"
+        r"|cardholder"
+        r"|card\s*holder"
+        r")"
+        r"\s*[:.\-]?\s*"
+        r"(.*)$"
     )
 
-    for i, line in enumerate(lines):
-        m = explicit_re.search(line.strip())
-        if not m:
+    for index, line in enumerate(lines):
+
+        match = explicit_name_pattern.search(
+            line.strip()
+        )
+
+        if not match:
             continue
 
-        same_line = clean_name_candidate(m.group(1))
-        if same_line:
-            return same_line
+        value = match.group(1).strip()
 
-        if i + 1 < len(lines):
-            next_line = clean_name_candidate(lines[i + 1])
-            if next_line:
-                return next_line
+        # Same line:
+        # Name : ANURAG BREJA
+        candidate = clean_name_candidate(
+            value
+        )
 
-    # --------------------------------------------------------
-    # 3. LABEL + VALUE may be separated by OCR noise.
-    # Look within the next two lines, but stop at another field label.
-    # --------------------------------------------------------
-    label_words = re.compile(
-        r"(?i)^(?:name|full\s*name|cardholder|card\s*holder)\b"
-    )
-    stop_labels = re.compile(
-        r"(?i)^(?:father|father's|dob|date|gender|sex|address|blood|pan|aadhaar|aadhar|passport|licence|license|document|nationality|valid|expiry|issue)\b"
-    )
+        if candidate:
+            return candidate
 
-    for i, line in enumerate(lines):
-        if not label_words.search(line.strip()):
-            continue
-        for j in (i + 1, i + 2):
-            if j >= len(lines):
-                break
-            if stop_labels.search(lines[j].strip()):
-                break
-            candidate = clean_name_candidate(lines[j])
+        # Next line:
+        # Name
+        # ANURAG BREJA
+        if index + 1 < len(lines):
+
+            candidate = clean_name_candidate(
+                lines[index + 1]
+            )
+
             if candidate:
                 return candidate
 
-    # --------------------------------------------------------
-    # 4. DOCUMENT-SPECIFIC fallbacks.
-    # PAN/Aadhaar/DL commonly have a bare "Name" followed by the
-    # value; father's name and other nearby fields are explicitly
-    # rejected before accepting anything.
-    # --------------------------------------------------------
-    bad_context = re.compile(
-        r"(?i)(father|father's|date\s+of\s+birth|dob|permanent\s+account|income\s+tax|government|address|blood\s+group)"
-    )
+    # ========================================================
+    # PAN CARD SPECIAL FALLBACK
+    #
+    # Avoid Father's Name / DOB becoming Name
+    # ========================================================
+
+    pan_bad_labels = [
+        "father",
+        "father's name",
+        "father name",
+        "date of birth",
+        "date of birth incorporation",
+        "dob",
+        "permanent account number",
+        "income tax department",
+        "government of india",
+    ]
+
+    for index, line in enumerate(lines):
+
+        line_lower = line.lower().strip()
+
+        if (
+            line_lower == "name"
+            or line_lower.startswith(
+                "name "
+            )
+        ):
+
+            if index + 1 < len(lines):
+
+                candidate = clean_name_candidate(
+                    lines[index + 1]
+                )
+
+                if candidate:
+
+                    candidate_lower = (
+                        candidate.lower()
+                    )
+
+                    if not any(
+                        bad in candidate_lower
+                        for bad in pan_bad_labels
+                    ):
+                        return candidate
+
+    # ========================================================
+    # DRIVING LICENCE / GENERIC LINE CANDIDATES
+    # ========================================================
 
     candidates = []
-    for i, line in enumerate(lines):
-        candidate = clean_name_candidate(line)
+
+    for index, line in enumerate(lines):
+
+        candidate = clean_name_candidate(
+            line
+        )
+
         if not candidate:
             continue
 
-        score = score_name_candidate(candidate)
-        words = candidate.split()
-        if 2 <= len(words) <= 4:
-            score += 18
-        elif len(words) == 1:
-            score += 2
+        score = 0
 
-        previous = lines[i - 1].strip().lower() if i > 0 else ""
-        next_line = lines[i + 1].strip().lower() if i + 1 < len(lines) else ""
+        # Existing scoring if available
+        try:
 
-        if previous in {"name", "name:", "name -", "full name", "full name:"}:
-            score += 120
-        if "name" in previous and not bad_context.search(previous):
-            score += 70
-        if bad_context.search(previous) or bad_context.search(next_line):
-            score -= 80
+            score = score_name_candidate(
+                candidate
+            )
 
-        # Avoid accepting common headings / authority text as names.
-        if any(x in candidate.lower() for x in (
-            "india", "government", "department", "transport", "passport",
-            "licence", "license", "authority", "nationality", "address",
-            "signature", "validity", "identity", "card"
-        )):
+        except Exception:
+
+            score = 0
+
+        lower = candidate.lower()
+
+        # Positive scoring
+        if 1 <= len(
+            candidate.split()
+        ) <= 4:
+
+            score += 20
+
+        # Nearby "name" label = strong signal
+        previous_line = ""
+
+        if index > 0:
+            previous_line = (
+                lines[index - 1]
+                .lower()
+                .strip()
+            )
+
+        if (
+            previous_line == "name"
+            or previous_line.startswith(
+                "name:"
+            )
+        ):
+
+            score += 100
+
+        # Negative document words
+        negative_words = [
+            "passport",
+            "licence",
+            "license",
+            "government",
+            "department",
+            "transport",
+            "authorisation",
+            "authorization",
+            "country",
+            "nationality",
+            "issuing",
+            "date",
+            "birth",
+            "expiry",
+            "issue",
+            "address",
+            "signature",
+        ]
+
+        if any(
+            word in lower
+            for word in negative_words
+        ):
+
             score -= 1000
 
-        candidates.append((score, candidate))
+        candidates.append(
+            (
+                score,
+                candidate,
+            )
+        )
+
+    # ========================================================
+    # BEST GENERIC CANDIDATE
+    # ========================================================
 
     if candidates:
-        candidates.sort(key=lambda item: item[0], reverse=True)
-        best_score, best_candidate = candidates[0]
-        if best_score >= 45:
+
+        candidates.sort(
+            key=lambda item: item[0],
+            reverse=True,
+        )
+
+        best_score, best_candidate = (
+            candidates[0]
+        )
+
+        if best_score > -500:
             return best_candidate
 
     return None
@@ -3085,38 +3535,27 @@ def extract_ocr_data(image):
             else 0
         )
 
-        important_fields = (
-            "aadhaar_number",
-            "pan_number",
-            "driving_licence_number",
-            "passport_number",
-            "visa_number",
-            "voter_id_number",
-            "gstin",
-        )
-
         important_field_count = (
             sum(
                 1
-                for field in important_fields
-                if best.get("structured", {}).get(field)
+                for value in (
+                    best.get("structured", {}) or {}
+                ).values()
+                if value
             )
             if best
             else 0
         )
 
         # --------------------------------------------------------
-        # PASS 2 - PSM 11 ONLY FOR GENUINELY WEAK OCR
+        # PASS 2 - PSM 11 ONLY IF NEEDED
         # --------------------------------------------------------
-        # Keep the common path to one Tesseract pass. This is the
-        # main speed improvement for the Render deployment.
         needs_second_pass = (
             best is None
-            or confidence < 40
-            or not normalize_text(
-                best.get("text", "")
-            )
-            or text_length < 25
+            or confidence < 55
+            or category == "UNKNOWN"
+            or text_length < 40
+            or important_field_count == 0
         )
 
         if needs_second_pass:
@@ -3163,7 +3602,8 @@ def extract_ocr_data(image):
         # --------------------------------------------------------
         needs_enhancement = (
             best is None
-            or confidence < 30
+            or confidence < 45
+            or category == "UNKNOWN"
             or not normalize_text(
                 best.get("text", "")
             )
@@ -4562,8 +5002,8 @@ def analyze_pdf(
 
             pix = page.get_pixmap(
                 matrix=fitz.Matrix(
-                    1.8,
-                    1.8,
+                    2.5,
+                    2.5,
                 ),
                 alpha=False,
             )
