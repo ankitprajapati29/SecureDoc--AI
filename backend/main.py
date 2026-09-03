@@ -36,11 +36,6 @@ except Exception:
     CV2_AVAILABLE = False
 
 
-# PaddleOCR is intentionally disabled for the lightweight deployment.
-# Tesseract is the active OCR engine.
-PADDLE_AVAILABLE = False
-_PADDLE_ENGINE_ERROR = "PaddleOCR disabled for lightweight Tesseract deployment"
-
 # ============================================================
 # FASTAPI APP
 # ============================================================
@@ -92,8 +87,8 @@ MAX_OCR_TEXT_LENGTH = 25000
 
 MAX_PDF_OCR_PAGES = 5
 
-OCR_TARGET_WIDTH = 2000
-OCR_MAX_DIMENSION = 3000
+OCR_TARGET_WIDTH = 1600
+OCR_MAX_DIMENSION = 2400
 
 # ============================================================
 # DOCUMENT LABELS
@@ -334,10 +329,13 @@ def get_ocr_language():
             )
         )
 
-        if "eng" in languages:
-            return "eng"
+        if (
+            "eng" in languages
+            and "hin" in languages
+        ):
+            return "eng+hin"
 
-        if "hin" in languages:
+        if "eng" in languages:
             return "eng"
 
         if languages:
@@ -1359,17 +1357,6 @@ def detect_document_type(text):
             "ACCOUNT HOLDER",
         ],
     )
-
-    # --------------------------------------------------------
-    # NUMBER-BASED RECOVERY
-    # OCR can miss the document title while still reading the
-    # document number. Use these strong formats as a fallback.
-    # --------------------------------------------------------
-    if re.search(r"(?<!\\d)\\d{4}[ -]?\\d{4}[ -]?\\d{4}(?!\\d)", upper):
-        scores["AADHAAR_CARD"] = max(scores.get("AADHAAR_CARD", 0), 3)
-
-    if re.search(r"\\b[A-Z]{5}[0-9]{4}[A-Z]\\b", upper):
-        scores["PAN_CARD"] = max(scores.get("PAN_CARD", 0), 3)
 
     # --------------------------------------------------------
     # BEST MATCH
@@ -2535,15 +2522,11 @@ def extract_fields_from_text(
         "pan_number": extract_pan_number(text),
         "driving_licence_number": (
             extract_driving_licence_number(text)
-            if category == "DRIVING_LICENCE"
-            or re.search(r"(?i)\\b(?:DL|LICEN[CS]E)\\b", text)
-            else None
+            if category == "DRIVING_LICENCE" else None
         ),
         "passport_number": (
             extract_passport_number(text)
-            if category == "PASSPORT"
-            or re.search(r"(?i)\\bPASSPORT\\b", text)
-            else None
+            if category == "PASSPORT" else None
         ),
         "voter_id_number": (
             extract_voter_id_number(text)
@@ -2961,48 +2944,68 @@ def build_field_consensus(
 
 def extract_ocr_data(image):
     """
-    Smart OCR pipeline:
-    - PSM 6 is the fast primary pass.
-    - PSM 11 is automatically added when a document/name/important
-      field is missing, even when the first pass has decent confidence.
-    - A single enhanced pass is used only for genuinely difficult images.
-    - Text from successful passes is merged instead of throwing away
-      useful lines captured by the other layout mode.
-    - Structured fields are extracted from the merged OCR text and
-      cross-pass consensus is used to reduce OCR mistakes.
+    Fast + reliable Tesseract OCR.
+
+    Strategy:
+    1. Fast standard PSM 6 pass.
+    2. PSM 11 only when the first result is weak/incomplete.
+    3. One enhanced grayscale pass only when both results are weak.
+    4. Select the best/most useful OCR result.
     """
+
     language = get_ocr_language()
     candidates = []
     original_image = None
     enhanced_image = None
 
     try:
-        original_image = fix_orientation(image).convert("RGB")
+        # --------------------------------------------------------
+        # PREPARE ONE NORMAL OCR IMAGE
+        # --------------------------------------------------------
+        original_image = fix_orientation(
+            image
+        ).convert("RGB")
+
         original_image = resize_for_ocr(
-            original_image,
-            target_width=2000,
-            max_dimension=3000,
+            original_image
         )
 
+        # --------------------------------------------------------
+        # ADD OCR RESULT
+        # --------------------------------------------------------
         def add_candidate(result, variant_name, config):
-            text = normalize_text(result.get("text", ""))
+            text = normalize_text(
+                result.get("text", "")
+            )
+
             if not text:
                 return
 
             result["variant"] = variant_name
             result["engine"] = "tesseract"
 
-            detection = detect_document_type(text)
-            structured = extract_fields_from_text(text, detection)
+            detection = detect_document_type(
+                text
+            )
 
+            structured = extract_fields_from_text(
+                text,
+                detection,
+            )
+
+            # Normal OCR quality score
             score = text_quality_score(
                 text,
                 result.get("confidence", 0),
             )
 
+            # Give extra value to OCR results that
+            # successfully identify a document.
             if detection.get("document_category") != "UNKNOWN":
-                score += 8
+                score += 5
 
+            # Give extra value to results containing
+            # important document numbers.
             important_fields = (
                 "aadhaar_number",
                 "pan_number",
@@ -3014,56 +3017,73 @@ def extract_ocr_data(image):
             )
 
             found_fields = sum(
-                1 for field in important_fields
+                1
+                for field in important_fields
                 if structured.get(field)
             )
-            score += found_fields * 10
 
-            if structured.get("name"):
-                score += 18 + min(
-                    len(str(structured["name"]).split()) * 4,
-                    16,
-                )
+            score += found_fields * 8
 
-            result["score"] = round(score, 2)
+            result["score"] = round(
+                score,
+                2,
+            )
+
             result["detection"] = detection
             result["structured"] = structured
+
             candidates.append(result)
 
         # --------------------------------------------------------
-        # PASS 1 — FAST STANDARD DOCUMENT LAYOUT
+        # PASS 1 - FAST STANDARD OCR
         # --------------------------------------------------------
+        result = run_ocr_pass(
+            original_image,
+            "--oem 3 --psm 6",
+            language,
+        )
+
         add_candidate(
-            run_ocr_pass(
-                original_image,
-                "--oem 3 --psm 6",
-                language,
-            ),
+            result,
             "original_psm6",
             "--oem 3 --psm 6",
         )
 
+        # --------------------------------------------------------
+        # CHECK FIRST RESULT
+        # --------------------------------------------------------
         best = max(
             candidates,
             key=lambda item: item.get("score", -999),
             default=None,
         )
 
-        def current_stats(item):
-            if not item:
-                return 0.0, "UNKNOWN", 0, {}
-            structured = item.get("structured", {}) or {}
-            return (
-                float(item.get("confidence", 0) or 0),
-                item.get("detection", {}).get(
-                    "document_category",
-                    "UNKNOWN",
-                ),
-                len(normalize_text(item.get("text", ""))),
-                structured,
+        confidence = (
+            float(
+                best.get("confidence", 0) or 0
             )
+            if best
+            else 0.0
+        )
 
-        confidence, category, text_length, structured = current_stats(best)
+        category = (
+            best.get("detection", {}).get(
+                "document_category",
+                "UNKNOWN",
+            )
+            if best
+            else "UNKNOWN"
+        )
+
+        text_length = (
+            len(
+                normalize_text(
+                    best.get("text", "")
+                )
+            )
+            if best
+            else 0
+        )
 
         important_fields = (
             "aadhaar_number",
@@ -3074,71 +3094,102 @@ def extract_ocr_data(image):
             "voter_id_number",
             "gstin",
         )
-        important_field_count = sum(
-            1 for field in important_fields
-            if structured.get(field)
+
+        important_field_count = (
+            sum(
+                1
+                for field in important_fields
+                if best.get("structured", {}).get(field)
+            )
+            if best
+            else 0
         )
 
         # --------------------------------------------------------
-        # PASS 2 — SMART LAYOUT RECOVERY
+        # PASS 2 - PSM 11 ONLY FOR GENUINELY WEAK OCR
         # --------------------------------------------------------
-        # This is intentionally NOT based only on confidence.
-        # A high-confidence PSM6 result can still miss a Name,
-        # DOB, passport fields, etc. PSM11 is therefore triggered
-        # whenever a meaningful field/document signal is missing.
+        # Keep the common path to one Tesseract pass. This is the
+        # main speed improvement for the Render deployment.
         needs_second_pass = (
             best is None
-            or confidence < 48
-            or text_length < 45
-            or category == "UNKNOWN"
-            or not structured.get("name")
-            or important_field_count == 0
+            or confidence < 40
+            or not normalize_text(
+                best.get("text", "")
+            )
+            or text_length < 25
         )
 
         if needs_second_pass:
+            result = run_ocr_pass(
+                original_image,
+                "--oem 3 --psm 11",
+                language,
+            )
+
             add_candidate(
-                run_ocr_pass(
-                    original_image,
-                    "--oem 3 --psm 11",
-                    language,
-                ),
+                result,
                 "original_psm11",
                 "--oem 3 --psm 11",
             )
 
+        # --------------------------------------------------------
+        # CHECK AGAIN
+        # --------------------------------------------------------
         best = max(
             candidates,
             key=lambda item: item.get("score", -999),
             default=None,
         )
-        confidence, category, text_length, structured = current_stats(best)
+
+        confidence = (
+            float(
+                best.get("confidence", 0) or 0
+            )
+            if best
+            else 0.0
+        )
+
+        category = (
+            best.get("detection", {}).get(
+                "document_category",
+                "UNKNOWN",
+            )
+            if best
+            else "UNKNOWN"
+        )
 
         # --------------------------------------------------------
-        # PASS 3 — ENHANCED IMAGE ONLY WHEN BOTH LAYOUT PASSES
-        #             ARE STILL INSUFFICIENT
+        # PASS 3 - ENHANCED OCR ONLY FOR DIFFICULT DOCUMENTS
         # --------------------------------------------------------
         needs_enhancement = (
             best is None
-            or confidence < 32
-            or text_length < 25
-            or (
-                category == "UNKNOWN"
-                and not structured.get("name")
+            or confidence < 30
+            or not normalize_text(
+                best.get("text", "")
             )
         )
 
         if needs_enhancement:
-            enhanced_image = create_enhanced_gray(original_image)
+
+            enhanced_image = create_enhanced_gray(
+                original_image
+            )
+
+            result = run_ocr_pass(
+                enhanced_image,
+                "--oem 3 --psm 6",
+                language,
+            )
+
             add_candidate(
-                run_ocr_pass(
-                    enhanced_image,
-                    "--oem 3 --psm 6",
-                    language,
-                ),
+                result,
                 "enhanced_gray_psm6",
                 "--oem 3 --psm 6",
             )
 
+        # --------------------------------------------------------
+        # NO OCR RESULT
+        # --------------------------------------------------------
         if not candidates:
             return {
                 "extracted_text": "",
@@ -3156,137 +3207,72 @@ def extract_ocr_data(image):
             }
 
         # --------------------------------------------------------
-        # MERGED OCR TEXT
+        # FINAL BEST OCR RESULT
         # --------------------------------------------------------
-        # Keep the union of useful lines from every OCR layout pass.
-        # This fixes the previous behaviour where the "best" candidate
-        # could have a good score but silently omit fields found by
-        # another pass.
-        merged_lines = []
-        seen_normalized = set()
-
-        for candidate in sorted(
-            candidates,
+        candidates.sort(
             key=lambda item: (
                 item.get("score", -999),
                 item.get("confidence", 0),
+                len(
+                    normalize_text(
+                        item.get("text", "")
+                    )
+                ),
             ),
             reverse=True,
-        ):
-            for line in split_clean_lines(
-                candidate.get("text", "")
-            ):
-                key = re.sub(
-                    r"[^a-z0-9]+",
-                    "",
-                    line.lower(),
-                )
-                if not key or key in seen_normalized:
-                    continue
-                seen_normalized.add(key)
-                merged_lines.append(line)
+        )
 
-        merged_text = normalize_text(
-            "\n".join(merged_lines)
-        )[:MAX_OCR_TEXT_LENGTH]
-
-        # If line-level union became unexpectedly empty, retain the
-        # strongest OCR result.
-        if not merged_text:
-            best = max(
-                candidates,
-                key=lambda item: (
-                    item.get("score", -999),
-                    item.get("confidence", 0),
-                ),
-            )
-            merged_text = normalize_text(
-                best.get("text", "")
-            )[:MAX_OCR_TEXT_LENGTH]
+        best = candidates[0]
 
         # --------------------------------------------------------
-        # FINAL DETECTION FROM ALL OCR TEXT
+        # FINAL DOCUMENT DETECTION
         # --------------------------------------------------------
         final_detection = detect_document_type(
-            merged_text
+            best.get("text", "")
         )
 
         # --------------------------------------------------------
-        # RE-EXTRACT EVERY CANDIDATE AGAINST FINAL CATEGORY
+        # RE-EXTRACT STRUCTURED FIELDS
         # --------------------------------------------------------
         for candidate in candidates:
-            candidate["structured"] = extract_fields_from_text(
-                candidate.get("text", ""),
-                final_detection,
+            candidate["structured"] = (
+                extract_fields_from_text(
+                    candidate.get("text", ""),
+                    final_detection,
+                )
             )
 
-        # Also extract directly from merged text. This is important
-        # when Name is present in PSM6 while DOB/number is present in
-        # PSM11 (or vice versa).
-        merged_structured = extract_fields_from_text(
-            merged_text,
-            final_detection,
-        )
-
-        structured_data, field_confidence = build_field_consensus(
-            candidates,
-            final_detection,
-        )
-
-        # Prefer a valid value found in the merged OCR text when the
-        # candidate consensus missed it.
-        for field, value in merged_structured.items():
-            if field in {"document", "document_category"}:
-                continue
-            if (
-                not structured_data.get(field)
-                and field_value_is_valid(field, value)
-            ):
-                structured_data[field] = value
-                field_confidence[field] = max(
-                    field_confidence.get(field, 0),
-                    72.0,
-                )
-
-        # Rebuild the document fields from the final detection.
-        structured_data["document"] = final_detection.get(
-            "document_label",
-            "Unknown Document",
-        )
-        structured_data["document_category"] = final_detection.get(
-            "document_category",
-            "UNKNOWN",
+        # --------------------------------------------------------
+        # FIELD CONSENSUS
+        # --------------------------------------------------------
+        structured_data, field_confidence = (
+            build_field_consensus(
+                candidates,
+                final_detection,
+            )
         )
 
         # --------------------------------------------------------
-        # FINAL OCR CONFIDENCE
+        # FINAL TEXT
         # --------------------------------------------------------
-        confidences = [
-            float(c.get("confidence", 0) or 0)
-            for c in candidates
-            if c.get("text")
-        ]
-        best = max(
-            candidates,
-            key=lambda item: (
-                item.get("score", -999),
-                item.get("confidence", 0),
-                len(normalize_text(item.get("text", ""))),
-            ),
-        )
-
-        # Use the strongest pass for the displayed OCR confidence;
-        # merged text is used for completeness, not to fake confidence.
-        final_confidence = float(
-            best.get("confidence", 0) or 0
-        )
+        raw_ocr_text = normalize_text(
+            best.get("text", "")
+        )[:MAX_OCR_TEXT_LENGTH]
 
         candidate_summary = [
             {
-                "variant": candidate.get("variant"),
-                "engine": candidate.get("engine"),
-                "confidence": candidate.get("confidence"),
-                "score": candidate.get("score"),
+                "variant": candidate.get(
+                    "variant"
+                ),
+                "engine": candidate.get(
+                    "engine"
+                ),
+                "confidence": candidate.get(
+                    "confidence"
+                ),
+                "score": candidate.get(
+                    "score"
+                ),
                 "document": final_detection.get(
                     "document_label"
                 ),
@@ -3295,18 +3281,28 @@ def extract_ocr_data(image):
         ]
 
         return {
-            "extracted_text": merged_text,
-            "raw_ocr_text": merged_text,
-            "ocr_confidence": final_confidence,
+            "extracted_text": raw_ocr_text,
+            "raw_ocr_text": raw_ocr_text,
+            "ocr_confidence": float(
+                best.get(
+                    "confidence",
+                    0
+                )
+                or 0
+            ),
             "ocr_status": (
                 "TEXT_DETECTED"
-                if merged_text
+                if raw_ocr_text
                 else "NO_TEXT_DETECTED"
             ),
             "ocr_language": language,
             "ocr_engine": "tesseract",
-            "ocr_variant": best.get("variant"),
-            "ocr_candidates_tested": len(candidates),
+            "ocr_variant": best.get(
+                "variant"
+            ),
+            "ocr_candidates_tested": len(
+                candidates
+            ),
             "document_detection": final_detection,
             "structured_data": structured_data,
             "field_confidence": field_confidence,
@@ -3327,17 +3323,28 @@ def extract_ocr_data(image):
             "ocr_language": language,
             "ocr_engine": "tesseract",
             "ocr_variant": None,
-            "ocr_candidates_tested": len(candidates),
-            "document_detection": detect_document_type(""),
+            "ocr_candidates_tested": len(
+                candidates
+            ),
+            "document_detection": detect_document_type(
+                ""
+            ),
             "structured_data": {},
             "field_confidence": {},
             "candidate_summary": [],
         }
 
     finally:
-        safe_close(enhanced_image)
-        safe_close(original_image)
+        # --------------------------------------------------------
+        # FREE MEMORY
+        # --------------------------------------------------------
+        safe_close(
+            enhanced_image
+        )
 
+        safe_close(
+            original_image
+        )
 
 # ============================================================
 # DISPLAY TEXT
