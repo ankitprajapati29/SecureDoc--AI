@@ -103,8 +103,8 @@ MAX_OCR_TEXT_LENGTH = 25000
 
 MAX_PDF_OCR_PAGES = 5
 
-OCR_TARGET_WIDTH = 2000
-OCR_MAX_DIMENSION = 3200
+OCR_TARGET_WIDTH = 1600
+OCR_MAX_DIMENSION = 2400
 
 # ============================================================
 # DOCUMENT LABELS
@@ -3535,27 +3535,38 @@ def extract_ocr_data(image):
             else 0
         )
 
+        important_fields = (
+            "aadhaar_number",
+            "pan_number",
+            "driving_licence_number",
+            "passport_number",
+            "visa_number",
+            "voter_id_number",
+            "gstin",
+        )
+
         important_field_count = (
             sum(
                 1
-                for value in (
-                    best.get("structured", {}) or {}
-                ).values()
-                if value
+                for field in important_fields
+                if best.get("structured", {}).get(field)
             )
             if best
             else 0
         )
 
         # --------------------------------------------------------
-        # PASS 2 - PSM 11 ONLY IF NEEDED
+        # PASS 2 - PSM 11 ONLY FOR GENUINELY WEAK OCR
         # --------------------------------------------------------
+        # Keep the common path to one Tesseract pass. This is the
+        # main speed improvement for the Render deployment.
         needs_second_pass = (
             best is None
-            or confidence < 55
-            or category == "UNKNOWN"
-            or text_length < 40
-            or important_field_count == 0
+            or confidence < 40
+            or not normalize_text(
+                best.get("text", "")
+            )
+            or text_length < 25
         )
 
         if needs_second_pass:
@@ -3602,8 +3613,7 @@ def extract_ocr_data(image):
         # --------------------------------------------------------
         needs_enhancement = (
             best is None
-            or confidence < 45
-            or category == "UNKNOWN"
+            or confidence < 30
             or not normalize_text(
                 best.get("text", "")
             )
@@ -5002,8 +5012,8 @@ def analyze_pdf(
 
             pix = page.get_pixmap(
                 matrix=fitz.Matrix(
-                    2.5,
-                    2.5,
+                    1.8,
+                    1.8,
                 ),
                 alpha=False,
             )
