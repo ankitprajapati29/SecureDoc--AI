@@ -87,8 +87,8 @@ MAX_OCR_TEXT_LENGTH = 25000
 
 MAX_PDF_OCR_PAGES = 5
 
-OCR_TARGET_WIDTH = 1600
-OCR_MAX_DIMENSION = 2400
+OCR_TARGET_WIDTH = 2000
+OCR_MAX_DIMENSION = 3000
 
 # ============================================================
 # DOCUMENT LABELS
@@ -329,14 +329,16 @@ def get_ocr_language():
             )
         )
 
-        if (
-            "eng" in languages
-            and "hin" in languages
-        ):
-            return "eng+hin"
-
+        # English-only is the fastest and usually the most accurate
+        # mode for identity/document fields. Mixed eng+hin can reduce
+        # recognition quality on English names and numbers.
         if "eng" in languages:
             return "eng"
+
+        if (
+            "hin" in languages
+        ):
+            return "hin"
 
         if languages:
             return next(
@@ -3110,13 +3112,33 @@ def extract_ocr_data(image):
         # --------------------------------------------------------
         # Keep the common path to one Tesseract pass. This is the
         # main speed improvement for the Render deployment.
+        current_structured = (
+            best.get("structured", {})
+            if best
+            else {}
+        )
+
+        # A second sparse-text pass is useful when Tesseract found text
+        # but missed the actual identity fields. This keeps clear scans
+        # fast while recovering names/numbers on difficult layouts.
         needs_second_pass = (
             best is None
-            or confidence < 40
-            or not normalize_text(
-                best.get("text", "")
+            or confidence < 42
+            or not normalize_text(best.get("text", ""))
+            or text_length < 35
+            or not current_structured.get("name")
+            or (
+                category in {
+                    "AADHAAR_CARD", "PAN_CARD",
+                    "DRIVING_LICENCE", "PASSPORT",
+                    "VOTER_ID", "VISA"
+                }
+                and not any(
+                    current_structured.get(field)
+                    for field in important_fields
+                    if field in current_structured
+                )
             )
-            or text_length < 25
         )
 
         if needs_second_pass:
@@ -3163,10 +3185,8 @@ def extract_ocr_data(image):
         # --------------------------------------------------------
         needs_enhancement = (
             best is None
-            or confidence < 30
-            or not normalize_text(
-                best.get("text", "")
-            )
+            or confidence < 25
+            or not normalize_text(best.get("text", ""))
         )
 
         if needs_enhancement:
