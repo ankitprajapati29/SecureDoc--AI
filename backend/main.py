@@ -3399,34 +3399,26 @@ def extract_ocr_data(image):
     Strategy:
     1. Fast standard PSM 6 pass.
     2. PSM 11 only when the first result is weak/incomplete.
-    3. One enhanced grayscale pass only when both results are weak.
+    3. No third OCR pass to avoid unnecessary processing time.
     4. Select the best/most useful OCR result.
     """
 
     language = get_ocr_language()
     candidates = []
     original_image = None
-    enhanced_image = None
 
     try:
         # --------------------------------------------------------
         # PREPARE ONE NORMAL OCR IMAGE
         # --------------------------------------------------------
-        original_image = fix_orientation(
-            image
-        ).convert("RGB")
-
-        original_image = resize_for_ocr(
-            original_image
-        )
+        original_image = fix_orientation(image).convert("RGB")
+        original_image = resize_for_ocr(original_image)
 
         # --------------------------------------------------------
         # ADD OCR RESULT
         # --------------------------------------------------------
         def add_candidate(result, variant_name, config):
-            text = normalize_text(
-                result.get("text", "")
-            )
+            text = normalize_text(result.get("text", ""))
 
             if not text:
                 return
@@ -3434,9 +3426,7 @@ def extract_ocr_data(image):
             result["variant"] = variant_name
             result["engine"] = "tesseract"
 
-            detection = detect_document_type(
-                text
-            )
+            detection = detect_document_type(text)
 
             structured = extract_fields_from_text(
                 text,
@@ -3449,13 +3439,11 @@ def extract_ocr_data(image):
                 result.get("confidence", 0),
             )
 
-            # Give extra value to OCR results that
-            # successfully identify a document.
+            # Give extra value to results that identify a document
             if detection.get("document_category") != "UNKNOWN":
                 score += 5
 
-            # Give extra value to results containing
-            # important document numbers.
+            # Give extra value to important document numbers
             important_fields = (
                 "aadhaar_number",
                 "pan_number",
@@ -3474,11 +3462,7 @@ def extract_ocr_data(image):
 
             score += found_fields * 8
 
-            result["score"] = round(
-                score,
-                2,
-            )
-
+            result["score"] = round(score, 2)
             result["detection"] = detection
             result["structured"] = structured
 
@@ -3509,9 +3493,7 @@ def extract_ocr_data(image):
         )
 
         confidence = (
-            float(
-                best.get("confidence", 0) or 0
-            )
+            float(best.get("confidence", 0) or 0)
             if best
             else 0.0
         )
@@ -3548,13 +3530,13 @@ def extract_ocr_data(image):
         )
 
         # --------------------------------------------------------
-        # PASS 2 - PSM 11 ONLY IF NEEDED
+        # PASS 2 - PSM 11 ONLY IF REALLY NEEDED
         # --------------------------------------------------------
         needs_second_pass = (
             best is None
-            or confidence < 55
+            or confidence < 50
             or category == "UNKNOWN"
-            or text_length < 40
+            or text_length < 30
             or important_field_count == 0
         )
 
@@ -3569,62 +3551,6 @@ def extract_ocr_data(image):
                 result,
                 "original_psm11",
                 "--oem 3 --psm 11",
-            )
-
-        # --------------------------------------------------------
-        # CHECK AGAIN
-        # --------------------------------------------------------
-        best = max(
-            candidates,
-            key=lambda item: item.get("score", -999),
-            default=None,
-        )
-
-        confidence = (
-            float(
-                best.get("confidence", 0) or 0
-            )
-            if best
-            else 0.0
-        )
-
-        category = (
-            best.get("detection", {}).get(
-                "document_category",
-                "UNKNOWN",
-            )
-            if best
-            else "UNKNOWN"
-        )
-
-        # --------------------------------------------------------
-        # PASS 3 - ENHANCED OCR ONLY FOR DIFFICULT DOCUMENTS
-        # --------------------------------------------------------
-        needs_enhancement = (
-            best is None
-            or confidence < 45
-            or category == "UNKNOWN"
-            or not normalize_text(
-                best.get("text", "")
-            )
-        )
-
-        if needs_enhancement:
-
-            enhanced_image = create_enhanced_gray(
-                original_image
-            )
-
-            result = run_ocr_pass(
-                enhanced_image,
-                "--oem 3 --psm 6",
-                language,
-            )
-
-            add_candidate(
-                result,
-                "enhanced_gray_psm6",
-                "--oem 3 --psm 6",
             )
 
         # --------------------------------------------------------
@@ -3701,18 +3627,10 @@ def extract_ocr_data(image):
 
         candidate_summary = [
             {
-                "variant": candidate.get(
-                    "variant"
-                ),
-                "engine": candidate.get(
-                    "engine"
-                ),
-                "confidence": candidate.get(
-                    "confidence"
-                ),
-                "score": candidate.get(
-                    "score"
-                ),
+                "variant": candidate.get("variant"),
+                "engine": candidate.get("engine"),
+                "confidence": candidate.get("confidence"),
+                "score": candidate.get("score"),
                 "document": final_detection.get(
                     "document_label"
                 ),
@@ -3724,11 +3642,7 @@ def extract_ocr_data(image):
             "extracted_text": raw_ocr_text,
             "raw_ocr_text": raw_ocr_text,
             "ocr_confidence": float(
-                best.get(
-                    "confidence",
-                    0
-                )
-                or 0
+                best.get("confidence", 0) or 0
             ),
             "ocr_status": (
                 "TEXT_DETECTED"
@@ -3737,12 +3651,8 @@ def extract_ocr_data(image):
             ),
             "ocr_language": language,
             "ocr_engine": "tesseract",
-            "ocr_variant": best.get(
-                "variant"
-            ),
-            "ocr_candidates_tested": len(
-                candidates
-            ),
+            "ocr_variant": best.get("variant"),
+            "ocr_candidates_tested": len(candidates),
             "document_detection": final_detection,
             "structured_data": structured_data,
             "field_confidence": field_confidence,
@@ -3763,12 +3673,8 @@ def extract_ocr_data(image):
             "ocr_language": language,
             "ocr_engine": "tesseract",
             "ocr_variant": None,
-            "ocr_candidates_tested": len(
-                candidates
-            ),
-            "document_detection": detect_document_type(
-                ""
-            ),
+            "ocr_candidates_tested": len(candidates),
+            "document_detection": detect_document_type(""),
             "structured_data": {},
             "field_confidence": {},
             "candidate_summary": [],
@@ -3778,13 +3684,7 @@ def extract_ocr_data(image):
         # --------------------------------------------------------
         # FREE MEMORY
         # --------------------------------------------------------
-        safe_close(
-            enhanced_image
-        )
-
-        safe_close(
-            original_image
-        )
+        safe_close(original_image)
 
 # ============================================================
 # DISPLAY TEXT
