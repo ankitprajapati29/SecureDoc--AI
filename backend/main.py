@@ -3397,10 +3397,10 @@ def extract_ocr_data(image):
     Fast + reliable Tesseract OCR.
 
     Strategy:
-    1. Fast standard PSM 6 pass.
-    2. PSM 11 only when the first result is weak/incomplete.
-    3. No third OCR pass to avoid unnecessary processing time.
-    4. Select the best/most useful OCR result.
+    1. One fast PSM 6 OCR pass for normal documents.
+    2. PSM 11 fallback only when OCR is genuinely weak.
+    3. No unnecessary OCR variants.
+    4. Preserve existing document detection and field extraction.
     """
 
     language = get_ocr_language()
@@ -3409,7 +3409,7 @@ def extract_ocr_data(image):
 
     try:
         # --------------------------------------------------------
-        # PREPARE ONE NORMAL OCR IMAGE
+        # PREPARE OCR IMAGE
         # --------------------------------------------------------
         original_image = fix_orientation(image).convert("RGB")
         original_image = resize_for_ocr(original_image)
@@ -3433,17 +3433,17 @@ def extract_ocr_data(image):
                 detection,
             )
 
-            # Normal OCR quality score
+            # OCR quality score
             score = text_quality_score(
                 text,
                 result.get("confidence", 0),
             )
 
-            # Give extra value to results that identify a document
+            # Document type detected
             if detection.get("document_category") != "UNKNOWN":
                 score += 5
 
-            # Give extra value to important document numbers
+            # Important document fields
             important_fields = (
                 "aadhaar_number",
                 "pan_number",
@@ -3469,7 +3469,7 @@ def extract_ocr_data(image):
             candidates.append(result)
 
         # --------------------------------------------------------
-        # PASS 1 - FAST STANDARD OCR
+        # PASS 1 — FAST STANDARD OCR
         # --------------------------------------------------------
         result = run_ocr_pass(
             original_image,
@@ -3517,27 +3517,21 @@ def extract_ocr_data(image):
             else 0
         )
 
-        important_field_count = (
-            sum(
-                1
-                for value in (
-                    best.get("structured", {}) or {}
-                ).values()
-                if value
-            )
-            if best
-            else 0
-        )
-
         # --------------------------------------------------------
-        # PASS 2 - PSM 11 ONLY IF REALLY NEEDED
+        # FAST FALLBACK DECISION
+        # --------------------------------------------------------
+        #
+        # IMPORTANT:
+        # Do NOT run PSM 11 merely because an important field
+        # was not detected. Field extraction can fail even when
+        # OCR itself is good.
+        #
+        # PSM 11 is used only when the OCR result is actually weak.
         # --------------------------------------------------------
         needs_second_pass = (
             best is None
-            or confidence < 50
-            or category == "UNKNOWN"
-            or text_length < 30
-            or important_field_count == 0
+            or confidence < 45
+            or text_length < 25
         )
 
         if needs_second_pass:
@@ -3685,7 +3679,6 @@ def extract_ocr_data(image):
         # FREE MEMORY
         # --------------------------------------------------------
         safe_close(original_image)
-
 # ============================================================
 # DISPLAY TEXT
 # ============================================================
