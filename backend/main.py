@@ -58,7 +58,7 @@ except Exception:
 
 app = FastAPI(
     title="SecureDoc AI Backend",
-    version="5.2.0",
+    version="5.1.0",
 )
 
 
@@ -363,17 +363,6 @@ def get_ocr_language():
         pass
 
     return "eng"
-
-
-def get_fast_ocr_language():
-    """Use English first for speed; Hindi is used only as a fallback."""
-    try:
-        languages = set(pytesseract.get_languages(config=""))
-        if "eng" in languages:
-            return "eng"
-    except Exception:
-        pass
-    return get_ocr_language()
 
 
 # ============================================================
@@ -1382,17 +1371,11 @@ def detect_document_type(text):
         ],
     )
 
-    pan_candidates = re.findall(
-        r"(?<![A-Z0-9])[A-Z]{5}\s*[0-9OIl]{4}\s*[A-Z0-9](?![A-Z0-9])",
+    if re.search(
+        r"\b[A-Z]{5}[0-9]{4}[A-Z]\b",
         upper,
-    )
-    if any(
-        re.fullmatch(r"[A-Z]{5}[0-9OIL]{4}[A-Z0-9]", re.sub(r"\s+", "", candidate))
-        for candidate in pan_candidates
     ):
         pan_score += 3
-    elif re.search(r"\bPAN\s*(?:NO|NUMBER)?\b", upper):
-        pan_score += 1
 
     scores["PAN_CARD"] = pan_score
 
@@ -2090,26 +2073,17 @@ def extract_aadhaar_number(text):
 
 
 def extract_pan_number(text):
-    upper = normalize_text(text).upper()
 
-    # Exact PAN first.
-    match = re.search(r"(?<![A-Z0-9])([A-Z]{5}[0-9]{4}[A-Z])(?![A-Z0-9])", upper)
-    if match:
-        return match.group(1)
-
-    # OCR fallback: PANs are sometimes returned with spaces or O/I/l in
-    # numeric positions. Correct only those positions, never the whole text.
-    candidates = re.findall(
-        r"(?<![A-Z0-9])([A-Z]{5})\s*([0-9OIL]{4})\s*([A-Z0-9])(?![A-Z0-9])",
-        upper,
+    match = re.search(
+        r"\b([A-Z]{5}[0-9]{4}[A-Z])\b",
+        text.upper(),
     )
-    for prefix, digits, suffix in candidates:
-        normalized_digits = digits.translate(str.maketrans({"O":"0", "I":"1", "L":"1"}))
-        value = prefix + normalized_digits + suffix
-        if re.fullmatch(r"[A-Z]{5}[0-9]{4}[A-Z]", value):
-            return value
 
-    return None
+    return (
+        match.group(1)
+        if match
+        else None
+    )
 
 
 
@@ -3429,10 +3403,7 @@ def extract_ocr_data(image):
     4. Preserve existing document detection and field extraction.
     """
 
-    # Fast path: English OCR is substantially lighter for the common
-    # government/identity documents. Hindi is enabled only if the fast
-    # result is weak and the installation supports it.
-    language = get_fast_ocr_language()
+    language = get_ocr_language()
     candidates = []
     original_image = None
 
@@ -3559,20 +3530,15 @@ def extract_ocr_data(image):
         # --------------------------------------------------------
         needs_second_pass = (
             best is None
-            or confidence < 55
-            or text_length < 80
-            or category == "UNKNOWN"
+            or confidence < 45
+            or text_length < 25
         )
 
         if needs_second_pass:
-            # Sparse-text/layout mode is only used when the first pass
-            # is weak. This preserves speed on good documents while
-            # recovering small fields on difficult cards.
-            fallback_language = language
             result = run_ocr_pass(
                 original_image,
                 "--oem 3 --psm 11",
-                fallback_language,
+                language,
             )
 
             add_candidate(
@@ -3580,40 +3546,6 @@ def extract_ocr_data(image):
                 "original_psm11",
                 "--oem 3 --psm 11",
             )
-
-            # If English OCR is weak and Hindi is installed, give the
-            # difficult document one bilingual pass rather than making
-            # every upload pay the bilingual OCR cost.
-            if (
-                language == "eng"
-                and "hin" in set(pytesseract.get_languages(config=""))
-            ):
-                current_best = max(
-                    candidates,
-                    key=lambda item: item.get("score", -999),
-                    default=None,
-                )
-                current_text = normalize_text(
-                    current_best.get("text", "") if current_best else ""
-                )
-                current_conf = float(
-                    current_best.get("confidence", 0) if current_best else 0
-                )
-                current_category = (
-                    current_best.get("detection", {}).get("document_category", "UNKNOWN")
-                    if current_best else "UNKNOWN"
-                )
-                if current_conf < 50 or len(current_text) < 60 or current_category == "UNKNOWN":
-                    result = run_ocr_pass(
-                        original_image,
-                        "--oem 3 --psm 11",
-                        "eng+hin",
-                    )
-                    add_candidate(
-                        result,
-                        "bilingual_psm11",
-                        "--oem 3 --psm 11",
-                    )
 
         # --------------------------------------------------------
         # NO OCR RESULT
@@ -4777,9 +4709,10 @@ def analyze_image(
             "image_quality": quality,
             "face_detection": face_detection,
 
-            # IMPORTANT: extracted_text is the complete OCR text.
-            # Structured fields are returned separately in structured_data.
-            "extracted_text": raw_text,
+            "extracted_text": (
+                display_text
+                or raw_text
+            ),
 
             "raw_ocr_text": raw_text,
 
@@ -5153,7 +5086,10 @@ def analyze_pdf(
 
             "image_quality": None,
 
-            "extracted_text": combined_text,
+            "extracted_text": (
+                display_text
+                or combined_text
+            ),
 
             "raw_ocr_text": (
                 combined_text
@@ -5615,70 +5551,18 @@ def analyze_qr_signal(image, structured):
     }
     if not CV2_AVAILABLE or cv2 is None or not hasattr(cv2, "QRCodeDetector"):
         return result
-
     try:
-        rgb = image.convert("RGB")
-        base = np.ascontiguousarray(np.asarray(rgb, dtype=np.uint8))
+        array = np.ascontiguousarray(np.asarray(image.convert("RGB"), dtype=np.uint8))
         detector = cv2.QRCodeDetector()
-        candidates = [base]
-
-        # Small QR codes on ID cards often need a little enlargement.
-        h, w = base.shape[:2]
-        if min(h, w) < 900:
-            scale = min(2.0, 1400.0 / max(1, min(h, w)))
-            if scale > 1.05:
-                candidates.append(cv2.resize(base, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC))
-
-        decoded_data = None
-        for candidate in candidates:
-            for frame in (candidate, cv2.cvtColor(candidate, cv2.COLOR_RGB2GRAY)):
-                try:
-                    data, points, _ = detector.detectAndDecode(frame)
-                    if data:
-                        decoded_data = data
-                        break
-                except Exception:
-                    continue
-            if decoded_data:
-                break
-
-            # OpenCV multi-QR path can succeed when single detection does not.
-            try:
-                multi = detector.detectAndDecodeMulti(candidate)
-                if isinstance(multi, tuple) and len(multi) >= 2:
-                    ok = bool(multi[0])
-                    infos = multi[1] or []
-                    if ok and infos:
-                        decoded_data = next((str(x) for x in infos if x), None)
-                        if decoded_data:
-                            break
-            except Exception:
-                pass
-
-        result["available"] = True
-
-        if not decoded_data:
-            # detect() gives a more useful distinction than claiming the QR
-            # is absent when a QR-like square is present but unreadable.
-            detected_any = False
-            for candidate in candidates:
-                try:
-                    detected, points = detector.detect(candidate)
-                    if detected and points is not None:
-                        detected_any = True
-                        break
-                except Exception:
-                    pass
-            result["status"] = "PRESENT_NOT_DECODED" if detected_any else "NOT_DECODED"
+        data, points, _ = detector.detectAndDecode(array)
+        if not data:
+            result["available"] = True
+            result["status"] = "NOT_DECODED"
             return result
-
-        data = str(decoded_data)
+        result["available"] = True
         result["decoded"] = True
         result["status"] = "DECODED"
         result["data_length"] = len(data)
-        # Return a bounded preview for the UI without exposing an unbounded payload.
-        result["data_preview"] = data[:500]
-
         aadhaar = re.sub(r"\D", "", str(structured.get("aadhaar_number") or ""))
         qr_digits = re.sub(r"\D", "", data)
         if len(aadhaar) == 12 and len(qr_digits) >= 12:
@@ -5824,7 +5708,7 @@ def home():
             "SecureDoc AI Backend is Running!"
         ),
         "status": "online",
-        "version": "5.2.0",
+        "version": "5.1.0",
         "phase": (
             "Layout-aware multi-pass OCR "
             "with field-wise consensus extraction"
@@ -5876,7 +5760,7 @@ def health():
         "paddleocr_error": (
             _PADDLE_ENGINE_ERROR
         ),
-        "backend_version": "5.2.0",
+        "backend_version": "5.1.0",
     }
 
 
@@ -6139,4 +6023,4 @@ if __name__ == "__main__":
         host="127.0.0.1",
         port=8000,
         reload=True
-    ) 
+    )
