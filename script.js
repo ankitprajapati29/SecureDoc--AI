@@ -1082,6 +1082,11 @@ Waiting for OCR analysis...</pre>
             root.risk ||
             analysis.risk ||
             {};
+       const qr =
+    analysis.qr_analysis ||
+    root.qr_analysis ||
+    {};
+
 
 
         return {
@@ -1104,7 +1109,9 @@ Waiting for OCR analysis...</pre>
 
             face,
 
-            risk
+            risk,
+
+           qr
 
         };
     }
@@ -1734,6 +1741,215 @@ Waiting for OCR analysis...</pre>
     }
 
 
+/* =====================================================
+   QR VERIFICATION
+====================================================== */
+
+function renderQRVerification(data) {
+
+    const qr = data.qr || {};
+
+    const status =
+        String(
+            qr.status ||
+            "NOT_AVAILABLE"
+        ).toUpperCase();
+
+    let qrStatus = "Not Available";
+    let consistency = "Not Available";
+    let description = "QR analysis is not available for this document.";
+
+    if (status === "DECODED") {
+
+        qrStatus = "Decoded";
+
+        if (qr.data_consistent === true) {
+            consistency = "Matched";
+            description =
+                "QR data is consistent with the extracted document information.";
+        }
+        else if (qr.data_consistent === false) {
+            consistency = "Mismatch";
+            description =
+                "QR data does not match the extracted document information.";
+        }
+        else {
+            consistency = "Not Compared";
+            description =
+                "QR code was decoded, but no comparable document field was available.";
+        }
+
+    }
+    else if (status === "DATA_MISMATCH") {
+
+        qrStatus = "Decoded";
+        consistency = "Mismatch";
+
+        description =
+            "Decoded QR data is inconsistent with the extracted document information.";
+
+    }
+    else if (status === "NOT_DECODED") {
+
+        qrStatus = "Not Decoded";
+        consistency = "Not Available";
+
+        description =
+            "No readable QR code was detected in the document.";
+
+    }
+    else if (status === "ERROR") {
+
+        qrStatus = "Error";
+        consistency = "Not Available";
+
+        description =
+            "QR analysis could not be completed.";
+
+    }
+
+    if (!resultsSection) {
+        return;
+    }
+
+    let card =
+        document.getElementById(
+            "qrVerificationCard"
+        );
+
+    if (!card) {
+
+        card =
+            document.createElement("article");
+
+        card.id =
+            "qrVerificationCard";
+
+        card.className =
+            "result-card glass-card";
+
+        resultsSection.appendChild(card);
+    }
+
+    const statusClass =
+        (
+            status === "DECODED" &&
+            qr.data_consistent === true
+        )
+            ? "success"
+            : (
+                status === "DATA_MISMATCH"
+                ? "danger"
+                : "info"
+            );
+
+    card.innerHTML = `
+
+        <div class="card-title">
+
+            <div class="title-icon">
+                🔳
+            </div>
+
+            <div>
+                <h3>
+                    QR Verification
+                </h3>
+
+                <p>
+                    QR code decoding and data consistency check
+                </p>
+            </div>
+
+            <span
+                class="badge ${statusClass}"
+            >
+                ${qrStatus}
+            </span>
+
+        </div>
+
+
+        <div
+            class="tampering-box"
+            style="
+                margin-top:16px;
+                display:grid;
+                grid-template-columns:
+                    repeat(auto-fit,minmax(200px,1fr));
+                gap:12px;
+            "
+        >
+
+            <div>
+                <strong>
+                    QR Status
+                </strong>
+
+                <div
+                    style="
+                        margin-top:6px;
+                        font-weight:600;
+                    "
+                >
+                    ${qrStatus}
+                </div>
+            </div>
+
+
+            <div>
+                <strong>
+                    Data Consistency
+                </strong>
+
+                <div
+                    style="
+                        margin-top:6px;
+                        font-weight:600;
+                    "
+                >
+                    ${consistency}
+                </div>
+            </div>
+
+
+            ${
+                qr.data_length
+                    ? `
+                        <div>
+                            <strong>
+                                QR Data Length
+                            </strong>
+
+                            <div
+                                style="
+                                    margin-top:6px;
+                                    font-weight:600;
+                                "
+                            >
+                                ${qr.data_length}
+                            </div>
+                        </div>
+                    `
+                    : ""
+            }
+
+        </div>
+
+
+        <div
+            style="
+                margin-top:14px;
+                line-height:1.6;
+            "
+        >
+            ${description}
+        </div>
+
+    `;
+}
+   
+   
         /* =====================================================
        FACE VERIFICATION
     ====================================================== */
@@ -1973,138 +2189,467 @@ Waiting for OCR analysis...</pre>
     }
 
 
-    /* =====================================================
-       RISK ASSESSMENT
+   /* =====================================================
+   RISK ASSESSMENT + RISK BREAKDOWN
+====================================================== */
 
-       BACKEND:
-       risk_assessment = {
-           score,
-           level,
-           description
-       }
+function renderRisk(data) {
 
-    ====================================================== */
+    const risk =
+        data.risk || {};
 
-    function renderRisk(
-        data
-    ) {
+    let score =
+        Number(
+            risk.score ||
+            risk.risk_score
+        );
 
-        const {
-            risk
-        } = data;
+    /*
+       FALLBACK ONLY IF BACKEND
+       SCORE IS NOT AVAILABLE
+    */
 
-
-        let score =
-            Number(
-
-                risk.score ||
-
-                risk.risk_score
-
-            );
-
-
-        /*
-           FALLBACK ONLY IF BACKEND
-           SCORE IS NOT AVAILABLE
-        */
-
-        if (
-            !Number.isFinite(score)
-        ) {
-
-            score =
-                calculateFallbackRisk(
-                    data
-                );
-        }
-
+    if (!Number.isFinite(score)) {
 
         score =
-            Math.max(
-                0,
-                Math.min(
-                    100,
-                    Math.round(score)
-                )
+            calculateFallbackRisk(
+                data
             );
+    }
 
-
-        let level =
-            cleanValue(
-
-                risk.level ||
-
-                risk.risk_level
-
-            );
-
-
-        /*
-           CALCULATE LEVEL ONLY
-           IF BACKEND DID NOT SEND IT
-        */
-
-        if (!level) {
-
-            if (score <= 20) {
-
-                level =
-                    "LOW RISK";
-
-            } else if (score <= 50) {
-
-                level =
-                    "MODERATE RISK";
-
-            } else {
-
-                level =
-                    "HIGH RISK";
-            }
-        }
-
-
-        const description =
-            cleanValue(
-
-                risk.description ||
-
-                risk.message
-
-            ) ||
-            "Final assessment is based on backend document analysis signals.";
-
-
-        setText(
-            riskLevel,
-            level
+    score =
+        Math.max(
+            0,
+            Math.min(
+                100,
+                Math.round(score)
+            )
         );
 
 
-        setText(
-            riskDescription,
-            description
+    let level =
+        cleanValue(
+            risk.level ||
+            risk.risk_level
         );
 
 
-        if (riskScore) {
+    if (!level) {
 
-            riskScore.textContent =
-                score;
+        if (score <= 25) {
+            level = "LOW RISK";
         }
+        else if (score <= 60) {
+            level = "MEDIUM RISK";
+        }
+        else {
+            level = "HIGH RISK";
+        }
+    }
 
 
-        /*
-           Optional styling
-        */
+    const description =
+        cleanValue(
+            risk.description ||
+            risk.message
+        ) ||
+        "Final assessment is based on backend document analysis signals.";
 
-        setStatusStyle(
-            riskLevel,
-            level
+
+    /*
+       EXISTING RISK UI
+    */
+
+    setText(
+        riskLevel,
+        level
+    );
+
+    setText(
+        riskDescription,
+        description
+    );
+
+    if (riskScore) {
+
+        riskScore.textContent =
+            score;
+    }
+
+    setStatusStyle(
+        riskLevel,
+        level
+    );
+
+
+    /*
+       RISK BREAKDOWN
+    */
+
+    if (!resultsSection) {
+        return;
+    }
+
+
+    let card =
+        document.getElementById(
+            "riskBreakdownCard"
+        );
+
+
+    if (!card) {
+
+        card =
+            document.createElement("article");
+
+        card.id =
+            "riskBreakdownCard";
+
+        card.className =
+            "result-card glass-card";
+
+        resultsSection.appendChild(card);
+    }
+
+
+    const signals =
+        Array.isArray(
+            risk.signals
+        )
+            ? risk.signals
+            : [];
+
+
+    const analysis =
+        data.analysis || {};
+
+
+    /*
+       Helper
+    */
+
+    function signalContains(text) {
+
+        return signals.some(
+            signal =>
+                String(signal)
+                    .toLowerCase()
+                    .includes(
+                        text.toLowerCase()
+                    )
         );
     }
 
+
+    /*
+       FILE INTEGRITY
+    */
+
+    const fileIntegrity =
+        signalContains("signature")
+            ? "REVIEW"
+            : "PASS";
+
+
+    /*
+       OCR QUALITY
+    */
+
+    const ocrConfidence =
+        Number(
+            data.ocr?.confidence || 0
+        );
+
+    let ocrQuality =
+        "GOOD";
+
+    if (
+        data.ocr?.status ===
+        "NO_TEXT_DETECTED"
+    ) {
+        ocrQuality =
+            "NO TEXT";
+    }
+    else if (
+        ocrConfidence > 0 &&
+        ocrConfidence < 40
+    ) {
+        ocrQuality =
+            "LOW";
+    }
+    else if (
+        ocrConfidence > 0 &&
+        ocrConfidence < 60
+    ) {
+        ocrQuality =
+            "MODERATE";
+    }
+
+
+    /*
+       DOCUMENT STRUCTURE
+    */
+
+    const structure =
+        signalContains(
+            "could not be parsed"
+        )
+            ? "INVALID"
+            : "VALID";
+
+
+    /*
+       AADHAAR CHECKSUM
+    */
+
+    const aadhaarChecksum =
+        signalContains(
+            "fails checksum"
+        )
+            ? "FAILED"
+            : (
+                signalContains(
+                    "aadhaar"
+                )
+                    ? "VALID"
+                    : "N/A"
+            );
+
+
+    /*
+       QR CONSISTENCY
+    */
+
+    const qr =
+        data.qr || {};
+
+    let qrConsistency =
+        "N/A";
+
+    if (
+        qr.status ===
+        "DATA_MISMATCH"
+    ) {
+        qrConsistency =
+            "MISMATCH";
+    }
+    else if (
+        qr.data_consistent === true
+    ) {
+        qrConsistency =
+            "MATCHED";
+    }
+    else if (
+        qr.status ===
+        "DECODED"
+    ) {
+        qrConsistency =
+            "NOT COMPARED";
+    }
+
+
+    /*
+       TAMPERING
+    */
+
+    const tampering =
+        data.tampering || {};
+
+    let tamperingStatus =
+        "LOW";
+
+    if (
+        tampering.detected === true ||
+        signalContains("tampering") ||
+        signalContains("editing-software") ||
+        signalContains("recompression") ||
+        signalContains("inconsistent image")
+    ) {
+        tamperingStatus =
+            "REVIEW";
+    }
+
+
+    /*
+       FACE
+    */
+
+    const face =
+        data.face || {};
+
+    let faceStatus =
+        "N/A";
+
+    const faceCount =
+        Number(
+            face.face_count || 0
+        );
+
+    if (faceCount === 1) {
+        faceStatus =
+            "1 FACE";
+    }
+    else if (faceCount > 1) {
+        faceStatus =
+            `${faceCount} FACES`;
+    }
+    else if (
+        String(face.status || "")
+            .toUpperCase() ===
+        "NO_FACE_DETECTED"
+    ) {
+        faceStatus =
+            "NO FACE";
+    }
+
+
+    /*
+       RENDER
+    */
+
+    const rows = [
+        [
+            "File Integrity",
+            fileIntegrity
+        ],
+        [
+            "OCR Quality",
+            ocrQuality
+        ],
+        [
+            "Document Structure",
+            structure
+        ],
+        [
+            "Aadhaar Checksum",
+            aadhaarChecksum
+        ],
+        [
+            "QR Consistency",
+            qrConsistency
+        ],
+        [
+            "Tampering Signals",
+            tamperingStatus
+        ],
+        [
+            "Face Detection",
+            faceStatus
+        ]
+    ];
+
+
+    card.innerHTML = `
+
+        <div class="card-title">
+
+            <div class="title-icon">
+                🛡
+            </div>
+
+            <div>
+                <h3>
+                    Risk Breakdown
+                </h3>
+
+                <p>
+                    Signals contributing to the final risk assessment
+                </p>
+            </div>
+
+            <span
+                class="badge info"
+            >
+                ${level}
+            </span>
+
+        </div>
+
+
+        <div
+            style="
+                margin-top:16px;
+                display:grid;
+                gap:10px;
+            "
+        >
+
+            ${
+                rows.map(
+                    row => `
+
+                        <div
+                            style="
+                                display:flex;
+                                justify-content:space-between;
+                                align-items:center;
+                                gap:16px;
+                                padding:12px 14px;
+                                border-radius:10px;
+                                background:rgba(255,255,255,0.04);
+                            "
+                        >
+
+                            <span>
+                                ${row[0]}
+                            </span>
+
+                            <strong>
+                                ${row[1]}
+                            </strong>
+
+                        </div>
+
+                    `
+                ).join("")
+            }
+
+        </div>
+
+
+        <div
+            style="
+                margin-top:18px;
+                padding:16px;
+                border-radius:12px;
+                background:rgba(255,255,255,0.05);
+                display:flex;
+                justify-content:space-between;
+                align-items:center;
+                gap:16px;
+            "
+        >
+
+            <div>
+
+                <div
+                    style="
+                        font-size:13px;
+                        opacity:.75;
+                    "
+                >
+                    FINAL RISK SCORE
+                </div>
+
+                <strong
+                    style="
+                        font-size:28px;
+                    "
+                >
+                    ${score}/100
+                </strong>
+
+            </div>
+
+
+            <strong>
+                ${level}
+            </strong>
+
+        </div>
+
+    `;
+}
 
     /* =====================================================
        RENDER COMPLETE ANALYSIS RESULT
@@ -2150,6 +2695,8 @@ Waiting for OCR analysis...</pre>
         renderTampering(
             data
         );
+
+       renderQRVerification(data);
 
 
         renderFaceVerification(
