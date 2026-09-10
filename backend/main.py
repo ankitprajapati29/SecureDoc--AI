@@ -5956,7 +5956,7 @@ async def upload_document(
         file_content
     ).hexdigest()
 
-       category = analysis_data.get(
+        category = analysis_data.get(
         "document_category",
         "UNKNOWN"
     )
@@ -5974,10 +5974,8 @@ async def upload_document(
         )
     )
 
-        # -----------------------------------------------------
-    # FINAL RESPONSE
-    # -----------------------------------------------------
-
+           # -----------------------------------------------------
+           # FINAL RESPONSE
     return {
         "success": True,
 
