@@ -5635,7 +5635,19 @@ def calculate_risk(file_format_valid, structure_valid, file_size, analysis):
         signals.append("PDF is encrypted")
 
     category = analysis.get("document_category", "UNKNOWN")
-    structured = analysis.get("structured_data") or {}
+    structured = analysis.get("structured_data") or {} 
+    # UNKNOWN DOCUMENT RISK
+if category == "UNKNOWN":
+    score += 35
+    signals.append(
+        "Document type could not be identified reliably"
+    )
+
+    if not structured:
+        score += 20
+        signals.append(
+            "No reliable structured document data extracted"
+        )
     if category == "AADHAAR_CARD":
         aadhaar = re.sub(r"\D", "", str(structured.get("aadhaar_number") or ""))
         if len(aadhaar) == 12:
@@ -5944,13 +5956,22 @@ async def upload_document(
         file_content
     ).hexdigest()
 
+       category = analysis_data.get(
+        "document_category",
+        "UNKNOWN"
+    )
+
     validation_status = (
-        "PASSED"
-        if (
-            file_format_valid
-            and structure_valid
+        "REVIEW"
+        if category == "UNKNOWN"
+        else (
+            "PASSED"
+            if (
+                file_format_valid
+                and structure_valid
+            )
+            else "REVIEW"
         )
-        else "REVIEW"
     )
 
         # -----------------------------------------------------
