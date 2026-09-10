@@ -17687,3 +17687,255 @@ footer {
     border-color: rgba(91, 140, 255, 0.16);
     background: rgba(91, 140, 255, 0.035);
 }
+
+/* =========================================================
+   SECUREDOC AI — MODERN + SMOOTH PERFORMANCE FINAL LAYER
+   Premium cybersecurity look with lighter GPU workload.
+   ========================================================= */
+
+/* Rendering baseline */
+html {
+    scroll-behavior: auto;
+}
+
+body {
+    text-rendering: optimizeLegibility;
+}
+
+/* Keep the cyber background, but make the ambient glows cheaper. */
+.background-glow {
+    width: 420px;
+    height: 420px;
+    filter: blur(85px);
+    opacity: 0.09;
+}
+
+.background-grid {
+    background-size: 52px 52px;
+    opacity: 0.72;
+}
+
+.background-noise {
+    opacity: 0.012;
+}
+
+/* Modern glass, reduced blur cost. */
+.navbar {
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: rgba(7, 12, 27, 0.84);
+}
+
+.glass-card,
+.document-card,
+.processing-card,
+.result-card,
+.risk-card,
+.upload-box,
+.ai-visual-card {
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+}
+
+/* Buttons: transform + shadow only; avoid animated filters. */
+.primary-btn,
+.analyze-btn,
+.new-scan-btn,
+.upload-button {
+    transition:
+        transform 0.2s ease,
+        box-shadow 0.2s ease,
+        background-color 0.2s ease;
+}
+
+.primary-btn:hover,
+.analyze-btn:hover,
+.new-scan-btn:hover,
+.upload-button:hover {
+    filter: none;
+}
+
+/* Clean modern micro-interactions. */
+.stat-card,
+.result-card,
+.pipeline-step,
+.upload-box,
+.risk-signal-row {
+    transition:
+        transform 0.2s ease,
+        border-color 0.2s ease,
+        background-color 0.2s ease;
+}
+
+.stat-card:hover,
+.result-card:hover,
+.pipeline-step:hover {
+    transform: translateY(-3px);
+}
+
+.risk-signal-row:hover {
+    transform: translateX(3px);
+}
+
+/* Keep only meaningful motion. */
+.status-dot {
+    animation: statusPulse 2.4s ease-in-out infinite;
+}
+
+.pulse-ring {
+    animation: ringPulse 2.4s ease-in-out infinite;
+}
+
+/* Hero gradient stays premium without a continuous sweep. */
+.hero h1 span {
+    background-size: 100% auto;
+    animation: none !important;
+}
+
+/* AI visual: one gentle orb movement, no stacked animation layers. */
+.ai-visual-card,
+.ai-visual-card::before,
+.ai-orb {
+    animation: none !important;
+}
+
+.orb-core {
+    animation: orbCoreFloat 8s ease-in-out infinite !important;
+}
+
+.orb-ring {
+    animation: none !important;
+}
+
+/* Scanner animation is retained because it communicates processing. */
+.scan-line {
+    animation: presentationScanLine 3s linear infinite !important;
+}
+
+/* Upload UI stays responsive and static until interaction/state changes. */
+.upload-icon,
+.upload-box.file-selected .upload-icon,
+.upload-box::before,
+.upload-box::after {
+    animation: none !important;
+}
+
+/* Processing: avoid continuous decorative sweeps. */
+.processing-card::before,
+.progress-shimmer,
+.progress-bar::after {
+    animation: none !important;
+}
+
+.processing-step.active,
+.processing-step.active .step-icon,
+.processing-step.active .step-number {
+    animation: none !important;
+}
+
+/* Fast result entrance: one short reveal instead of stacked reveal systems. */
+.results:not(.hidden) {
+    animation: finalResultsReveal 0.38s ease-out both !important;
+}
+
+.results:not(.hidden) .result-card {
+    animation: finalResultCardReveal 0.32s ease-out both !important;
+}
+
+.results:not(.hidden) .result-card:nth-child(n) {
+    animation-delay: 0s !important;
+}
+
+/* Risk UI: static by default, reacts only to user interaction/state. */
+.risk-live-dot,
+.risk-live-bar,
+.risk-meter,
+.risk-meter-inner {
+    animation: none !important;
+}
+
+/* Disable decorative infinite animation systems that add GPU load. */
+.visual-sweep,
+.heading-accent,
+.pipeline-signal,
+.upload-aura,
+.ai-analysis-sweep,
+.live-analysis-pulse,
+.risk-grid,
+.risk-outer,
+.meter-float,
+.meter-rotate,
+.title-shimmer,
+.projector,
+.presentation-glow,
+.cinematic-glow,
+.premium-glow {
+    animation: none !important;
+}
+
+/* Isolate paint work for large cards. */
+.result-card,
+.upload-box,
+.processing-card,
+.risk-card,
+.ai-visual-card {
+    contain: paint;
+}
+
+/* Avoid forcing permanent compositor layers across the entire page. */
+* {
+    will-change: auto;
+}
+
+/* Accessibility / reduced-motion support. */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
+/* Mobile performance mode. */
+@media (max-width: 768px) {
+    .background-glow {
+        width: 280px;
+        height: 280px;
+        filter: blur(55px);
+        opacity: 0.07;
+    }
+
+    .background-noise {
+        display: none;
+    }
+
+    .navbar {
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+    }
+
+    .glass-card,
+    .document-card,
+    .processing-card,
+    .result-card,
+    .risk-card,
+    .upload-box {
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+    }
+
+    .orb-core {
+        animation: none !important;
+    }
+
+    .scan-line {
+        animation-duration: 3.8s !important;
+    }
+}
+
+/* =========================================================
+   END — MODERN / SMOOTH PERFORMANCE LAYER
+   ========================================================= */
