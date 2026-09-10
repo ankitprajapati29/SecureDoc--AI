@@ -15545,3 +15545,2145 @@ a,
     }
 
 }
+
+/* ========================================================================
+   SECUREDOC AI — FINAL PROJECTOR / DESKTOP PRESENTATION EDITION
+   ------------------------------------------------------------------------
+   Purpose:
+   - Preserve the complete existing design and selectors.
+   - Improve projector readability and desktop visual hierarchy.
+   - Keep animations smooth and purposeful rather than distracting.
+   - Improve touch/mobile behavior without changing JS or backend behavior.
+   - No functional dependency: CSS-only enhancement layer.
+   ======================================================================== */
+
+/* ------------------------------------------------------------------------
+   01. PRESENTATION TOKENS
+   ------------------------------------------------------------------------ */
+
+:root {
+    --presentation-max: 1440px;
+    --presentation-readable: 1180px;
+    --presentation-glass: rgba(10, 18, 36, 0.82);
+    --presentation-glass-strong: rgba(8, 16, 33, 0.94);
+    --presentation-border: rgba(130, 166, 255, 0.20);
+    --presentation-border-strong: rgba(130, 166, 255, 0.34);
+    --presentation-blue-glow: rgba(91, 140, 255, 0.26);
+    --presentation-purple-glow: rgba(139, 92, 246, 0.20);
+    --presentation-cyan-glow: rgba(34, 211, 238, 0.15);
+    --presentation-speed: 0.28s;
+    --presentation-ease: cubic-bezier(.16, 1, .3, 1);
+}
+
+/* ------------------------------------------------------------------------
+   02. GLOBAL PRESENTATION FOUNDATION
+   ------------------------------------------------------------------------ */
+
+html {
+    scroll-behavior: smooth;
+    scroll-padding-top: 105px;
+}
+
+body.app-shell {
+    isolation: isolate;
+    min-width: 320px;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+body.app-shell::selection {
+    background: rgba(91, 140, 255, 0.35);
+    color: #ffffff;
+}
+
+a,
+button,
+input,
+label {
+    -webkit-tap-highlight-color: transparent;
+}
+
+button {
+    font: inherit;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible {
+    outline: 2px solid rgba(91, 140, 255, 0.85);
+    outline-offset: 4px;
+}
+
+/* ------------------------------------------------------------------------
+   03. BACKGROUND — DEPTH WITHOUT HEAVY GPU LOAD
+   ------------------------------------------------------------------------ */
+
+.background-grid {
+    opacity: 0.55;
+    background-size: 44px 44px;
+    mask-image: linear-gradient(
+        to bottom,
+        black 0%,
+        rgba(0, 0, 0, 0.92) 45%,
+        transparent 100%
+    );
+    -webkit-mask-image: linear-gradient(
+        to bottom,
+        black 0%,
+        rgba(0, 0, 0, 0.92) 45%,
+        transparent 100%
+    );
+}
+
+.background-noise {
+    opacity: 0.022;
+    pointer-events: none;
+}
+
+.background-glow {
+    pointer-events: none;
+    will-change: transform;
+}
+
+.glow-1 {
+    animation: presentationGlowFloat1 15s ease-in-out infinite;
+}
+
+.glow-2 {
+    animation: presentationGlowFloat2 19s ease-in-out infinite;
+}
+
+.glow-3 {
+    animation: presentationGlowFloat3 23s ease-in-out infinite;
+}
+
+@keyframes presentationGlowFloat1 {
+    0%, 100% {
+        transform: translate3d(0, 0, 0) scale(1);
+    }
+    50% {
+        transform: translate3d(22px, 18px, 0) scale(1.06);
+    }
+}
+
+@keyframes presentationGlowFloat2 {
+    0%, 100% {
+        transform: translate3d(0, 0, 0) scale(1);
+    }
+    50% {
+        transform: translate3d(-26px, 20px, 0) scale(1.08);
+    }
+}
+
+@keyframes presentationGlowFloat3 {
+    0%, 100% {
+        transform: translate3d(0, 0, 0) scale(1);
+    }
+    50% {
+        transform: translate3d(18px, -22px, 0) scale(1.05);
+    }
+}
+
+/* ------------------------------------------------------------------------
+   04. NAVBAR — STRONGER ON PROJECTOR
+   ------------------------------------------------------------------------ */
+
+.navbar {
+    width: min(var(--presentation-max), calc(100% - 40px));
+    min-height: 78px;
+    border-color: rgba(135, 169, 255, 0.20);
+    background:
+        linear-gradient(
+            135deg,
+            rgba(8, 15, 31, 0.94),
+            rgba(11, 19, 39, 0.86)
+        );
+    box-shadow:
+        0 18px 55px rgba(0, 0, 0, 0.32),
+        inset 0 1px 0 rgba(255, 255, 255, 0.055);
+    transition:
+        transform var(--presentation-speed) var(--presentation-ease),
+        border-color var(--presentation-speed) ease,
+        box-shadow var(--presentation-speed) ease,
+        background var(--presentation-speed) ease;
+}
+
+.navbar:hover {
+    border-color: rgba(135, 169, 255, 0.30);
+    box-shadow:
+        0 22px 70px rgba(0, 0, 0, 0.38),
+        0 0 35px rgba(91, 140, 255, 0.07),
+        inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+.brand {
+    min-width: 0;
+}
+
+.logo {
+    flex: 0 0 auto;
+    box-shadow:
+        0 12px 32px rgba(91, 140, 255, 0.32),
+        0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+    transition:
+        transform var(--presentation-speed) var(--presentation-ease),
+        box-shadow var(--presentation-speed) ease;
+}
+
+.brand:hover .logo {
+    transform: translateY(-2px) rotate(-2deg);
+    box-shadow:
+        0 15px 38px rgba(91, 140, 255, 0.40),
+        0 0 28px rgba(139, 92, 246, 0.18);
+}
+
+.brand-text h2 {
+    letter-spacing: -0.035em;
+}
+
+.brand-text p {
+    opacity: 0.72;
+}
+
+.nav-center a {
+    position: relative;
+    transition:
+        color var(--presentation-speed) ease,
+        transform var(--presentation-speed) var(--presentation-ease);
+}
+
+.nav-center a::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: -9px;
+    width: 0;
+    height: 2px;
+    border-radius: 99px;
+    background: linear-gradient(
+        90deg,
+        var(--primary),
+        var(--purple),
+        var(--cyan)
+    );
+    transform: translateX(-50%);
+    transition: width var(--presentation-speed) var(--presentation-ease);
+}
+
+.nav-center a:hover {
+    transform: translateY(-1px);
+}
+
+.nav-center a:hover::after {
+    width: 70%;
+}
+
+.security-chip,
+.system-status {
+    white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------------
+   05. HERO — MAIN PROJECTOR IMPACT
+   ------------------------------------------------------------------------ */
+
+.hero {
+    width: 100%;
+    min-height: 650px;
+    position: relative;
+}
+
+.hero::before {
+    content: "";
+    position: absolute;
+    left: -8%;
+    top: 12%;
+    width: 46%;
+    height: 70%;
+    pointer-events: none;
+    background:
+        radial-gradient(
+            ellipse,
+            rgba(91, 140, 255, 0.11),
+            transparent 68%
+        );
+    filter: blur(18px);
+    z-index: -1;
+}
+
+.hero::after {
+    content: "";
+    position: absolute;
+    right: -7%;
+    top: 18%;
+    width: 42%;
+    height: 65%;
+    pointer-events: none;
+    background:
+        radial-gradient(
+            ellipse,
+            rgba(139, 92, 246, 0.09),
+            transparent 68%
+        );
+    filter: blur(22px);
+    z-index: -1;
+}
+
+.hero-content {
+    z-index: 2;
+}
+
+.hero-tag {
+    box-shadow:
+        0 8px 30px rgba(91, 140, 255, 0.08),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.hero h1 {
+    letter-spacing: -0.055em;
+    text-wrap: balance;
+}
+
+.heading-accent {
+    position: relative;
+    display: inline-block;
+    text-shadow:
+        0 0 30px rgba(91, 140, 255, 0.13);
+}
+
+.heading-accent::after {
+    content: "";
+    position: absolute;
+    left: 2%;
+    right: 2%;
+    bottom: -4px;
+    height: 2px;
+    border-radius: 99px;
+    background:
+        linear-gradient(
+            90deg,
+            transparent,
+            rgba(91, 140, 255, 0.60),
+            rgba(139, 92, 246, 0.60),
+            transparent
+        );
+    opacity: 0.75;
+    transform-origin: center;
+    animation: headingAccentSweep 4.5s ease-in-out infinite;
+}
+
+@keyframes headingAccentSweep {
+    0%, 100% {
+        transform: scaleX(0.72);
+        opacity: 0.42;
+    }
+    50% {
+        transform: scaleX(1);
+        opacity: 0.86;
+    }
+}
+
+.hero-description {
+    max-width: 690px;
+    color: rgba(218, 225, 239, 0.86);
+}
+
+.hero-actions {
+    margin-top: 30px;
+}
+
+.hero-actions button,
+.hero-actions a {
+    transition:
+        transform var(--presentation-speed) var(--presentation-ease),
+        box-shadow var(--presentation-speed) ease,
+        border-color var(--presentation-speed) ease;
+}
+
+.hero-actions button:hover,
+.hero-actions a:hover {
+    transform: translateY(-3px);
+}
+
+.hero-stats {
+    margin-top: 34px;
+}
+
+.stat-card {
+    position: relative;
+    overflow: hidden;
+    border-color: rgba(255, 255, 255, 0.09);
+    background:
+        linear-gradient(
+            145deg,
+            rgba(255, 255, 255, 0.052),
+            rgba(255, 255, 255, 0.018)
+        );
+    box-shadow:
+        0 12px 32px rgba(0, 0, 0, 0.16),
+        inset 0 1px 0 rgba(255, 255, 255, 0.035);
+    transition:
+        transform var(--presentation-speed) var(--presentation-ease),
+        border-color var(--presentation-speed) ease,
+        box-shadow var(--presentation-speed) ease;
+}
+
+.stat-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+        linear-gradient(
+            120deg,
+            transparent 20%,
+            rgba(255, 255, 255, 0.045) 50%,
+            transparent 80%
+        );
+    transform: translateX(-120%);
+    transition: transform 0.75s var(--presentation-ease);
+}
+
+.stat-card:hover {
+    transform: translateY(-5px);
+    border-color: rgba(91, 140, 255, 0.24);
+    box-shadow:
+        0 18px 42px rgba(0, 0, 0, 0.22),
+        0 0 28px rgba(91, 140, 255, 0.06);
+}
+
+.stat-card:hover::before {
+    transform: translateX(120%);
+}
+
+/* ------------------------------------------------------------------------
+   06. AI VISUAL — SMOOTH CYBERSECURITY MOTION
+   ------------------------------------------------------------------------ */
+
+.ai-visual-card {
+    position: relative;
+    overflow: hidden;
+    border-color: rgba(91, 140, 255, 0.22);
+    box-shadow:
+        0 30px 90px rgba(0, 0, 0, 0.38),
+        0 0 65px rgba(91, 140, 255, 0.09),
+        inset 0 1px 0 rgba(255, 255, 255, 0.055);
+}
+
+.ai-visual-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+        linear-gradient(
+            120deg,
+            transparent 28%,
+            rgba(255, 255, 255, 0.035) 48%,
+            transparent 68%
+        );
+    background-size: 220% 100%;
+    animation: visualSweep 7s ease-in-out infinite;
+}
+
+@keyframes visualSweep {
+    0%, 100% {
+        background-position: 120% 0;
+    }
+    50% {
+        background-position: -40% 0;
+    }
+}
+
+.ai-orb {
+    filter: drop-shadow(0 0 24px rgba(91, 140, 255, 0.16));
+}
+
+.orb-core {
+    animation:
+        orbCorePulse 3.2s ease-in-out infinite,
+        orbCoreFloat 6s ease-in-out infinite;
+}
+
+@keyframes orbCorePulse {
+    0%, 100% {
+        box-shadow:
+            0 0 18px rgba(91, 140, 255, 0.18);
+    }
+    50% {
+        box-shadow:
+            0 0 42px rgba(91, 140, 255, 0.38),
+            0 0 72px rgba(139, 92, 246, 0.14);
+    }
+}
+
+@keyframes orbCoreFloat {
+    0%, 100% {
+        transform: translateY(0);
+    }
+    50% {
+        transform: translateY(-6px);
+    }
+}
+
+.orb-ring.ring-1 {
+    animation-duration: 8s;
+}
+
+.orb-ring.ring-2 {
+    animation-duration: 12s;
+}
+
+.scanner-grid {
+    opacity: 0.45;
+}
+
+.scan-line {
+    animation:
+        presentationScanLine 3.2s ease-in-out infinite;
+    box-shadow:
+        0 0 14px rgba(91, 140, 255, 0.45);
+}
+
+@keyframes presentationScanLine {
+    0% {
+        transform: translateY(-120%);
+        opacity: 0;
+    }
+    12% {
+        opacity: 0.9;
+    }
+    50% {
+        opacity: 1;
+    }
+    88% {
+        opacity: 0.9;
+    }
+    100% {
+        transform: translateY(120%);
+        opacity: 0;
+    }
+}
+
+.scanner-document {
+    transition:
+        transform 0.45s var(--presentation-ease),
+        box-shadow 0.45s ease;
+}
+
+.ai-visual-card:hover .scanner-document {
+    transform: translateY(-4px) scale(1.012);
+}
+
+/* ------------------------------------------------------------------------
+   07. SECTION HEADINGS
+   ------------------------------------------------------------------------ */
+
+.section-heading {
+    position: relative;
+}
+
+.section-heading h2 {
+    text-wrap: balance;
+    letter-spacing: -0.04em;
+}
+
+.section-heading p {
+    max-width: 760px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.section-kicker {
+    text-shadow:
+        0 0 18px rgba(91, 140, 255, 0.15);
+}
+
+/* ------------------------------------------------------------------------
+   08. PIPELINE — PRESENTATION FRIENDLY
+   ------------------------------------------------------------------------ */
+
+.pipeline {
+    position: relative;
+}
+
+.pipeline-step {
+    position: relative;
+    overflow: hidden;
+    min-height: 215px;
+    border-color: rgba(255, 255, 255, 0.10);
+    background:
+        linear-gradient(
+            145deg,
+            rgba(20, 31, 57, 0.70),
+            rgba(8, 15, 31, 0.62)
+        );
+    box-shadow:
+        0 14px 35px rgba(0, 0, 0, 0.16),
+        inset 0 1px 0 rgba(255, 255, 255, 0.035);
+    transition:
+        transform 0.34s var(--presentation-ease),
+        border-color 0.34s ease,
+        box-shadow 0.34s ease;
+}
+
+.pipeline-step::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+        radial-gradient(
+            circle at 50% 0%,
+            rgba(91, 140, 255, 0.10),
+            transparent 52%
+        );
+    opacity: 0;
+    transition: opacity 0.34s ease;
+}
+
+.pipeline-step:hover {
+    transform: translateY(-8px);
+    border-color: rgba(91, 140, 255, 0.34);
+    box-shadow:
+        0 22px 48px rgba(0, 0, 0, 0.24),
+        0 0 34px rgba(91, 140, 255, 0.07);
+}
+
+.pipeline-step:hover::before {
+    opacity: 1;
+}
+
+.pipeline-icon {
+    position: relative;
+    z-index: 1;
+    transition:
+        transform 0.34s var(--presentation-ease),
+        box-shadow 0.34s ease;
+}
+
+.pipeline-step:hover .pipeline-icon {
+    transform: translateY(-3px) scale(1.05);
+    box-shadow:
+        0 10px 28px rgba(91, 140, 255, 0.15);
+}
+
+.pipeline-connector {
+    opacity: 0.7;
+}
+
+/* ------------------------------------------------------------------------
+   09. MODULE CARDS
+   ------------------------------------------------------------------------ */
+
+.module-card {
+    position: relative;
+    overflow: hidden;
+    min-height: 250px;
+    border-color: rgba(255, 255, 255, 0.095);
+    background:
+        linear-gradient(
+            145deg,
+            rgba(17, 27, 49, 0.80),
+            rgba(7, 14, 29, 0.72)
+        );
+    box-shadow:
+        0 16px 42px rgba(0, 0, 0, 0.19),
+        inset 0 1px 0 rgba(255, 255, 255, 0.035);
+    transition:
+        transform 0.34s var(--presentation-ease),
+        border-color 0.34s ease,
+        box-shadow 0.34s ease;
+}
+
+.module-card::after {
+    content: "";
+    position: absolute;
+    width: 180px;
+    height: 180px;
+    right: -90px;
+    bottom: -110px;
+    border-radius: 50%;
+    pointer-events: none;
+    background:
+        radial-gradient(
+            circle,
+            rgba(91, 140, 255, 0.13),
+            transparent 68%
+        );
+    opacity: 0;
+    transition: opacity 0.4s ease;
+}
+
+.module-card:hover {
+    transform: translateY(-7px);
+    border-color: rgba(91, 140, 255, 0.30);
+    box-shadow:
+        0 24px 58px rgba(0, 0, 0, 0.25),
+        0 0 36px rgba(91, 140, 255, 0.06);
+}
+
+.module-card:hover::after {
+    opacity: 1;
+}
+
+.module-icon {
+    transition:
+        transform 0.34s var(--presentation-ease),
+        box-shadow 0.34s ease;
+}
+
+.module-card:hover .module-icon {
+    transform: translateY(-3px) scale(1.06);
+    box-shadow:
+        0 12px 30px rgba(91, 140, 255, 0.14);
+}
+
+/* ------------------------------------------------------------------------
+   10. WORKSPACE / UPLOAD — HERO-LIKE INTERACTION
+   ------------------------------------------------------------------------ */
+
+.upload-section {
+    position: relative;
+}
+
+.upload-box {
+    position: relative;
+    border-color: rgba(91, 140, 255, 0.34);
+    background:
+        linear-gradient(
+            145deg,
+            rgba(20, 35, 65, 0.72),
+            rgba(7, 15, 30, 0.68)
+        );
+    box-shadow:
+        0 25px 70px rgba(0, 0, 0, 0.25),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    transition:
+        transform 0.35s var(--presentation-ease),
+        border-color 0.35s ease,
+        box-shadow 0.35s ease,
+        background 0.35s ease;
+}
+
+.upload-box::before {
+    content: "";
+    position: absolute;
+    inset: 1px;
+    border-radius: inherit;
+    pointer-events: none;
+    border: 1px solid rgba(255, 255, 255, 0.025);
+}
+
+.upload-box::after {
+    content: "";
+    position: absolute;
+    left: 8%;
+    right: 8%;
+    top: 0;
+    height: 2px;
+    border-radius: 99px;
+    pointer-events: none;
+    background:
+        linear-gradient(
+            90deg,
+            transparent,
+            rgba(91, 140, 255, 0.85),
+            rgba(139, 92, 246, 0.80),
+            transparent
+        );
+    opacity: 0.55;
+}
+
+.upload-box:hover {
+    transform: translateY(-4px);
+    border-color: rgba(91, 140, 255, 0.50);
+    box-shadow:
+        0 32px 85px rgba(0, 0, 0, 0.32),
+        0 0 48px rgba(91, 140, 255, 0.08),
+        inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.upload-box.drag-active {
+    transform: translateY(-5px) scale(1.008);
+    border-color: rgba(34, 211, 238, 0.62);
+    box-shadow:
+        0 30px 80px rgba(0, 0, 0, 0.30),
+        0 0 65px rgba(34, 211, 238, 0.12);
+}
+
+.upload-icon {
+    filter:
+        drop-shadow(0 0 20px rgba(91, 140, 255, 0.18));
+    animation:
+        uploadIconFloat 4.5s ease-in-out infinite;
+}
+
+@keyframes uploadIconFloat {
+    0%, 100% {
+        transform: translateY(0);
+    }
+    50% {
+        transform: translateY(-7px);
+    }
+}
+
+.upload-box.file-selected .upload-icon {
+    animation: uploadSelectedPulse 2.8s ease-in-out infinite;
+}
+
+@keyframes uploadSelectedPulse {
+    0%, 100% {
+        transform: scale(1);
+        filter: drop-shadow(0 0 18px rgba(52, 211, 153, 0.15));
+    }
+    50% {
+        transform: scale(1.04);
+        filter: drop-shadow(0 0 30px rgba(52, 211, 153, 0.26));
+    }
+}
+
+.upload-features {
+    opacity: 0.88;
+}
+
+.upload-button,
+.analyze-btn,
+.primary-btn,
+.secondary-btn,
+.new-scan-btn {
+    transition:
+        transform 0.30s var(--presentation-ease),
+        box-shadow 0.30s ease,
+        border-color 0.30s ease,
+        background 0.30s ease;
+}
+
+.upload-button:hover,
+.analyze-btn:hover,
+.primary-btn:hover,
+.secondary-btn:hover,
+.new-scan-btn:hover {
+    transform: translateY(-3px);
+}
+
+.upload-button:active,
+.analyze-btn:active,
+.primary-btn:active,
+.secondary-btn:active,
+.new-scan-btn:active {
+    transform: translateY(0) scale(0.985);
+}
+
+/* ------------------------------------------------------------------------
+   11. PROCESSING — "LIVE AI" FEEL
+   ------------------------------------------------------------------------ */
+
+.processing,
+.results {
+    position: relative;
+}
+
+.processing-card {
+    position: relative;
+    overflow: hidden;
+    border-color: rgba(91, 140, 255, 0.20);
+    background:
+        linear-gradient(
+            145deg,
+            rgba(15, 28, 52, 0.88),
+            rgba(6, 14, 28, 0.88)
+        );
+    box-shadow:
+        0 25px 75px rgba(0, 0, 0, 0.28),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.processing-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+        linear-gradient(
+            115deg,
+            transparent 20%,
+            rgba(255, 255, 255, 0.035) 50%,
+            transparent 80%
+        );
+    background-size: 220% 100%;
+    animation: processingPresentationSweep 3.5s linear infinite;
+}
+
+@keyframes processingPresentationSweep {
+    from {
+        background-position: 180% 0;
+    }
+    to {
+        background-position: -80% 0;
+    }
+}
+
+.processing-step {
+    position: relative;
+    transition:
+        transform 0.35s var(--presentation-ease),
+        opacity 0.35s ease,
+        border-color 0.35s ease,
+        background 0.35s ease;
+}
+
+.processing-step.active {
+    transform: translateX(7px);
+}
+
+.processing-step.active .step-icon,
+.processing-step.active .step-number {
+    filter:
+        drop-shadow(0 0 10px rgba(91, 140, 255, 0.22));
+}
+
+.progress-wrapper {
+    overflow: hidden;
+}
+
+.progress {
+    position: relative;
+}
+
+.progress-bar {
+    box-shadow:
+        0 0 18px rgba(91, 140, 255, 0.18);
+}
+
+.progress-bar::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 90px;
+    right: 0;
+    background:
+        linear-gradient(
+            90deg,
+            transparent,
+            rgba(255, 255, 255, 0.24),
+            transparent
+        );
+    animation: progressShimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes progressShimmer {
+    0%, 100% {
+        transform: translateX(-90px);
+        opacity: 0;
+    }
+    50% {
+        transform: translateX(90px);
+        opacity: 0.9;
+    }
+}
+
+/* ------------------------------------------------------------------------
+   12. RESULTS — REPORT-LIKE VISUAL HIERARCHY
+   ------------------------------------------------------------------------ */
+
+.results {
+    position: relative;
+}
+
+.results::before {
+    content: "";
+    position: absolute;
+    left: 5%;
+    right: 5%;
+    top: 40px;
+    height: 280px;
+    pointer-events: none;
+    background:
+        radial-gradient(
+            ellipse at center,
+            rgba(91, 140, 255, 0.075),
+            transparent 70%
+        );
+    filter: blur(18px);
+}
+
+.result-header {
+    position: relative;
+    z-index: 1;
+}
+
+.result-header h2 {
+    letter-spacing: -0.045em;
+    text-wrap: balance;
+}
+
+.result-header p {
+    max-width: 760px;
+}
+
+.results:not(.hidden) {
+    animation:
+        finalResultsReveal 0.85s var(--presentation-ease) both;
+}
+
+@keyframes finalResultsReveal {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.results:not(.hidden) .result-card {
+    animation:
+        finalResultCardReveal 0.65s var(--presentation-ease) both;
+}
+
+.results:not(.hidden) .result-card:nth-child(1) { animation-delay: 0.08s; }
+.results:not(.hidden) .result-card:nth-child(2) { animation-delay: 0.15s; }
+.results:not(.hidden) .result-card:nth-child(3) { animation-delay: 0.22s; }
+.results:not(.hidden) .result-card:nth-child(4) { animation-delay: 0.29s; }
+.results:not(.hidden) .result-card:nth-child(5) { animation-delay: 0.36s; }
+.results:not(.hidden) .result-card:nth-child(6) { animation-delay: 0.43s; }
+.results:not(.hidden) .result-card:nth-child(7) { animation-delay: 0.50s; }
+.results:not(.hidden) .result-card:nth-child(8) { animation-delay: 0.57s; }
+.results:not(.hidden) .result-card:nth-child(9) { animation-delay: 0.64s; }
+
+@keyframes finalResultCardReveal {
+    from {
+        opacity: 0;
+        transform: translateY(24px) scale(0.985);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.result-card {
+    position: relative;
+    overflow: hidden;
+    border-color: rgba(255, 255, 255, 0.105);
+    background:
+        linear-gradient(
+            145deg,
+            rgba(16, 27, 49, 0.82),
+            rgba(7, 14, 29, 0.76)
+        );
+    box-shadow:
+        0 18px 48px rgba(0, 0, 0, 0.20),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    transition:
+        transform 0.30s var(--presentation-ease),
+        border-color 0.30s ease,
+        box-shadow 0.30s ease;
+}
+
+.result-card::before {
+    content: "";
+    position: absolute;
+    left: 7%;
+    right: 7%;
+    top: 0;
+    height: 2px;
+    border-radius: 99px;
+    pointer-events: none;
+    background:
+        linear-gradient(
+            90deg,
+            transparent,
+            rgba(91, 140, 255, 0.65),
+            rgba(139, 92, 246, 0.55),
+            transparent
+        );
+    opacity: 0.55;
+}
+
+.result-card:hover {
+    transform: translateY(-5px);
+    border-color: rgba(91, 140, 255, 0.25);
+    box-shadow:
+        0 24px 60px rgba(0, 0, 0, 0.26),
+        0 0 32px rgba(91, 140, 255, 0.05),
+        inset 0 1px 0 rgba(255, 255, 255, 0.055);
+}
+
+.card-title {
+    position: relative;
+    z-index: 2;
+}
+
+.card-title h3 {
+    letter-spacing: -0.02em;
+}
+
+.title-icon {
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.045),
+        0 8px 22px rgba(0, 0, 0, 0.14);
+    transition:
+        transform 0.30s var(--presentation-ease),
+        box-shadow 0.30s ease;
+}
+
+.result-card:hover .title-icon {
+    transform: translateY(-2px) scale(1.035);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.055),
+        0 12px 28px rgba(91, 140, 255, 0.10);
+}
+
+.badge {
+    min-width: max-content;
+    border: 1px solid rgba(255, 255, 255, 0.065);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+/* ------------------------------------------------------------------------
+   13. INFO / VALIDATION / OCR AREAS
+   ------------------------------------------------------------------------ */
+
+.info-grid {
+    gap: 14px;
+}
+
+.info-item,
+.validation-item,
+.tampering-box {
+    border-color: rgba(255, 255, 255, 0.055);
+    background:
+        linear-gradient(
+            145deg,
+            rgba(255, 255, 255, 0.042),
+            rgba(255, 255, 255, 0.018)
+        );
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.025);
+}
+
+.info-item,
+.validation-item {
+    transition:
+        transform 0.25s var(--presentation-ease),
+        border-color 0.25s ease,
+        background 0.25s ease;
+}
+
+.info-item:hover,
+.validation-item:hover {
+    transform: translateY(-2px);
+    border-color: rgba(91, 140, 255, 0.18);
+    background:
+        rgba(91, 140, 255, 0.045);
+}
+
+.validation-list {
+    gap: 10px;
+}
+
+.validation-item {
+    min-height: 58px;
+}
+
+.confidence {
+    text-shadow:
+        0 0 18px rgba(91, 140, 255, 0.10);
+}
+
+/* ------------------------------------------------------------------------
+   14. QR VERIFICATION — PREMIUM
+   ------------------------------------------------------------------------ */
+
+#qrVerificationCard {
+    border-color: rgba(34, 211, 238, 0.18);
+    background:
+        linear-gradient(
+            145deg,
+            rgba(10, 31, 49, 0.88),
+            rgba(7, 17, 31, 0.82)
+        );
+    box-shadow:
+        0 20px 58px rgba(0, 0, 0, 0.23),
+        0 0 35px rgba(34, 211, 238, 0.035),
+        inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+#qrVerificationCard::before {
+    background:
+        linear-gradient(
+            90deg,
+            transparent,
+            rgba(34, 211, 238, 0.82),
+            rgba(91, 140, 255, 0.72),
+            transparent
+        );
+}
+
+#qrVerificationCard .qr-info-item,
+#qrVerificationCard .info-item {
+    min-height: 82px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+#qrVerificationCard .qr-info-item strong,
+#qrVerificationCard .info-item strong {
+    color: rgba(232, 240, 255, 0.82);
+    font-size: 11px;
+    letter-spacing: 0.03em;
+}
+
+#qrVerificationCard .qr-message {
+    border-color: rgba(34, 211, 238, 0.08);
+    background:
+        rgba(34, 211, 238, 0.025);
+}
+
+/* ------------------------------------------------------------------------
+   15. TAMPERING / ANOMALY
+   ------------------------------------------------------------------------ */
+
+.tampering-box {
+    position: relative;
+    overflow: hidden;
+}
+
+.tampering-box::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 120px;
+    pointer-events: none;
+    background:
+        linear-gradient(
+            90deg,
+            transparent,
+            rgba(255, 255, 255, 0.025),
+            transparent
+        );
+    transform: translateX(-160px);
+    animation: tamperingSweep 6s ease-in-out infinite;
+}
+
+@keyframes tamperingSweep {
+    0%, 55%, 100% {
+        transform: translateX(-160px);
+    }
+    72% {
+        transform: translateX(760px);
+    }
+}
+
+/* ------------------------------------------------------------------------
+   16. FACE RESULT — DETECTION, NOT CLAIMED VERIFICATION
+   ------------------------------------------------------------------------ */
+
+.face-verification-card,
+.face-card {
+    position: relative;
+    overflow: hidden;
+}
+
+.face-circle {
+    box-shadow:
+        0 0 0 1px rgba(91, 140, 255, 0.10),
+        0 0 30px rgba(91, 140, 255, 0.08);
+    transition:
+        transform 0.35s var(--presentation-ease),
+        box-shadow 0.35s ease;
+}
+
+.face-verification-card:hover .face-circle,
+.face-card:hover .face-circle {
+    transform: scale(1.04);
+    box-shadow:
+        0 0 0 1px rgba(91, 140, 255, 0.20),
+        0 0 42px rgba(91, 140, 255, 0.14);
+}
+
+/* ------------------------------------------------------------------------
+   17. FINAL RISK CARD — THE "WOW" AREA
+   ------------------------------------------------------------------------ */
+
+#riskCard,
+.premium-risk-card {
+    position: relative;
+    overflow: hidden;
+    border-color: rgba(91, 140, 255, 0.28);
+    box-shadow:
+        0 30px 90px rgba(0, 0, 0, 0.34),
+        0 0 55px rgba(91, 140, 255, 0.065),
+        inset 0 1px 0 rgba(255, 255, 255, 0.055);
+}
+
+#riskCard::before,
+.premium-risk-card::before {
+    content: "";
+    position: absolute;
+    left: 8%;
+    right: 8%;
+    top: 0;
+    height: 2px;
+    pointer-events: none;
+    background:
+        linear-gradient(
+            90deg,
+            transparent,
+            rgba(91, 140, 255, 0.9),
+            rgba(139, 92, 246, 0.82),
+            rgba(34, 211, 238, 0.70),
+            transparent
+        );
+    opacity: 0.82;
+}
+
+.risk-live-bar {
+    position: relative;
+    z-index: 2;
+}
+
+.risk-live-dot {
+    box-shadow:
+        0 0 0 0 rgba(52, 211, 153, 0.35);
+    animation:
+        riskLivePulse 2.2s ease-out infinite;
+}
+
+@keyframes riskLivePulse {
+    0% {
+        box-shadow:
+            0 0 0 0 rgba(52, 211, 153, 0.34);
+    }
+    70% {
+        box-shadow:
+            0 0 0 9px rgba(52, 211, 153, 0);
+    }
+    100% {
+        box-shadow:
+            0 0 0 0 rgba(52, 211, 153, 0);
+    }
+}
+
+.risk-main-content {
+    position: relative;
+    z-index: 2;
+}
+
+.risk-left h2 {
+    text-shadow:
+        0 0 32px currentColor;
+    letter-spacing: -0.04em;
+}
+
+.risk-description {
+    color: rgba(220, 229, 244, 0.86);
+}
+
+.risk-meter {
+    position: relative;
+    isolation: isolate;
+    transition:
+        transform 0.45s var(--presentation-ease),
+        box-shadow 0.45s ease;
+}
+
+.risk-meter::before {
+    content: "";
+    position: absolute;
+    inset: -7px;
+    border-radius: 50%;
+    pointer-events: none;
+    border: 1px solid rgba(91, 140, 255, 0.13);
+    animation:
+        riskMeterPulse 3.8s ease-in-out infinite;
+}
+
+@keyframes riskMeterPulse {
+    0%, 100% {
+        transform: scale(0.98);
+        opacity: 0.40;
+    }
+    50% {
+        transform: scale(1.025);
+        opacity: 0.85;
+    }
+}
+
+.risk-meter-inner {
+    position: relative;
+    z-index: 2;
+}
+
+.risk-meter #riskScore {
+    text-shadow:
+        0 0 28px currentColor;
+    animation:
+        riskScoreBreath 3.4s ease-in-out infinite;
+}
+
+@keyframes riskScoreBreath {
+    0%, 100% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.025);
+    }
+}
+
+.risk-signal-row {
+    transition:
+        transform 0.25s var(--presentation-ease),
+        border-color 0.25s ease,
+        background 0.25s ease;
+}
+
+.risk-signal-row:hover {
+    transform: translateX(4px);
+}
+
+/* ------------------------------------------------------------------------
+   18. RISK BREAKDOWN CARD
+   ------------------------------------------------------------------------ */
+
+#riskBreakdownCard {
+    border-color: rgba(139, 92, 246, 0.18);
+    background:
+        linear-gradient(
+            145deg,
+            rgba(20, 18, 47, 0.78),
+            rgba(8, 14, 29, 0.82)
+        );
+}
+
+#riskBreakdownCard::before {
+    background:
+        linear-gradient(
+            90deg,
+            transparent,
+            rgba(139, 92, 246, 0.84),
+            rgba(91, 140, 255, 0.74),
+            transparent
+        );
+}
+
+#riskBreakdownCard .risk-breakdown-row {
+    min-height: 48px;
+    border: 1px solid rgba(255, 255, 255, 0.035);
+    background:
+        rgba(255, 255, 255, 0.032);
+    transition:
+        transform 0.25s var(--presentation-ease),
+        border-color 0.25s ease,
+        background 0.25s ease;
+}
+
+#riskBreakdownCard .risk-breakdown-row:hover {
+    transform: translateX(4px);
+    border-color: rgba(139, 92, 246, 0.16);
+    background:
+        rgba(139, 92, 246, 0.045);
+}
+
+#riskBreakdownCard .badge {
+    font-size: 10px;
+}
+
+/* ------------------------------------------------------------------------
+   19. FILE PREVIEW
+   ------------------------------------------------------------------------ */
+
+.file-preview {
+    position: relative;
+    overflow: hidden;
+    border-color: rgba(91, 140, 255, 0.16);
+    box-shadow:
+        0 18px 45px rgba(0, 0, 0, 0.22);
+}
+
+.file-icon {
+    filter:
+        drop-shadow(0 0 15px rgba(91, 140, 255, 0.12));
+}
+
+.file-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------------
+   20. DEMO STATUS / SECURITY SIGNALS
+   ------------------------------------------------------------------------ */
+
+.demo-status,
+.mini-status,
+.analysis-indicator {
+    transition:
+        border-color 0.25s ease,
+        background 0.25s ease,
+        transform 0.25s var(--presentation-ease);
+}
+
+.demo-status:hover,
+.mini-status:hover,
+.analysis-indicator:hover {
+    transform: translateY(-2px);
+}
+
+.status-dot,
+.live-dot,
+.signal-dot,
+.module-status span {
+    box-shadow:
+        0 0 0 0 rgba(52, 211, 153, 0.30);
+}
+
+.status-dot {
+    animation:
+        statusPulseProjector 2.4s ease-out infinite;
+}
+
+@keyframes statusPulseProjector {
+    0% {
+        box-shadow:
+            0 0 0 0 rgba(52, 211, 153, 0.30);
+    }
+    70% {
+        box-shadow:
+            0 0 0 8px rgba(52, 211, 153, 0);
+    }
+    100% {
+        box-shadow:
+            0 0 0 0 rgba(52, 211, 153, 0);
+    }
+}
+
+/* ------------------------------------------------------------------------
+   21. FOOTER
+   ------------------------------------------------------------------------ */
+
+footer {
+    position: relative;
+}
+
+.footer-brand {
+    letter-spacing: -0.02em;
+}
+
+.footer-status {
+    border-color: rgba(52, 211, 153, 0.12);
+    background:
+        rgba(52, 211, 153, 0.035);
+}
+
+/* ------------------------------------------------------------------------
+   22. LARGE LAPTOP / PROJECTOR MODE
+   ------------------------------------------------------------------------ */
+
+@media (min-width: 1200px) {
+
+    .container {
+        width: min(var(--presentation-max), calc(100% - 64px));
+    }
+
+    .navbar {
+        width: min(var(--presentation-max), calc(100% - 64px));
+    }
+
+    .hero {
+        grid-template-columns: minmax(0, 1.04fr) minmax(500px, 0.96fr);
+        gap: clamp(52px, 5vw, 86px);
+        padding-top: 92px;
+        padding-bottom: 92px;
+    }
+
+    .hero h1 {
+        font-size: clamp(58px, 5.1vw, 82px);
+        max-width: 790px;
+    }
+
+    .hero-description {
+        font-size: 16px;
+        line-height: 1.82;
+    }
+
+    .hero-visual {
+        transform: translateZ(0);
+    }
+
+    .section-heading h2 {
+        font-size: clamp(36px, 3.4vw, 52px);
+    }
+
+    .section-heading p {
+        font-size: 15px;
+        line-height: 1.8;
+    }
+
+    .pipeline-step h3,
+    .module-card h3 {
+        font-size: 18px;
+    }
+
+    .pipeline-step p,
+    .module-card p {
+        font-size: 13px;
+        line-height: 1.7;
+    }
+
+    .upload-box {
+        padding: 66px 48px;
+    }
+
+    .upload-box h3 {
+        font-size: 30px;
+    }
+
+    .upload-box > p {
+        font-size: 15px;
+    }
+
+    .result-card {
+        padding: 30px;
+    }
+
+    .card-title h3 {
+        font-size: 20px;
+    }
+
+    .card-title p {
+        font-size: 12px;
+    }
+
+    .info-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .risk-left h2 {
+        font-size: clamp(42px, 4vw, 58px);
+    }
+
+    .risk-meter {
+        transform: scale(1.02);
+    }
+
+    .risk-meter:hover {
+        transform: scale(1.07);
+    }
+}
+
+/* ------------------------------------------------------------------------
+   23. PROJECTOR / 1280x720 / SHORT-VIEWPORT TUNING
+   ------------------------------------------------------------------------ */
+
+@media (min-width: 1100px) and (max-height: 850px) {
+
+    .navbar {
+        min-height: 68px;
+        margin-top: 12px;
+    }
+
+    .hero {
+        min-height: 580px;
+        padding-top: 62px;
+        padding-bottom: 60px;
+    }
+
+    .hero h1 {
+        font-size: clamp(50px, 5.3vw, 72px);
+        margin-top: 20px;
+    }
+
+    .hero-description {
+        line-height: 1.65;
+    }
+
+    .hero-stats {
+        margin-top: 24px;
+    }
+
+    .ai-visual-card {
+        transform: scale(0.96);
+        transform-origin: center;
+    }
+
+    .pipeline-section,
+    .modules-section,
+    .upload-section,
+    .processing,
+    .results {
+        padding-top: 76px;
+        padding-bottom: 76px;
+    }
+
+    .section-heading {
+        margin-bottom: 30px;
+    }
+
+    .section-heading h2 {
+        font-size: 38px;
+    }
+
+    .section-heading p {
+        line-height: 1.65;
+    }
+
+    .pipeline-step {
+        min-height: 188px;
+        padding: 20px 15px;
+    }
+
+    .module-card {
+        min-height: 220px;
+    }
+
+    .upload-box {
+        padding: 48px 34px;
+    }
+
+    .upload-icon {
+        font-size: 50px;
+    }
+
+    .upload-box h3 {
+        font-size: 25px;
+    }
+
+    .processing,
+    .results {
+        padding-top: 72px;
+        padding-bottom: 72px;
+    }
+}
+
+/* ------------------------------------------------------------------------
+   24. ULTRA-WIDE PROJECTOR / LARGE MONITOR
+   ------------------------------------------------------------------------ */
+
+@media (min-width: 1600px) {
+
+    .container,
+    .navbar {
+        width: min(1480px, calc(100% - 80px));
+    }
+
+    .hero {
+        gap: 90px;
+        padding-top: 110px;
+        padding-bottom: 110px;
+    }
+
+    .hero h1 {
+        font-size: 84px;
+    }
+
+    .hero-description {
+        font-size: 17px;
+    }
+
+    .pipeline {
+        gap: 14px;
+    }
+
+    .pipeline-step {
+        min-height: 235px;
+    }
+
+    .modules {
+        gap: 18px;
+    }
+
+    .result-card {
+        padding: 34px;
+    }
+}
+
+/* ------------------------------------------------------------------------
+   25. MOBILE — SMOOTH, LIGHTER, TOUCH FRIENDLY
+   ------------------------------------------------------------------------ */
+
+@media (max-width: 900px) {
+
+    html {
+        scroll-padding-top: 82px;
+    }
+
+    .navbar {
+        width: calc(100% - 24px);
+        margin-top: 10px;
+        min-height: 64px;
+        padding: 10px 14px;
+        border-radius: 18px;
+    }
+
+    .brand-text p {
+        display: none;
+    }
+
+    .nav-center {
+        display: none;
+    }
+
+    .security-chip {
+        display: none;
+    }
+
+    .hero {
+        min-height: auto;
+        grid-template-columns: 1fr;
+        gap: 42px;
+        padding: 68px 0 62px;
+    }
+
+    .hero h1 {
+        font-size: clamp(42px, 11vw, 64px);
+    }
+
+    .hero-description {
+        font-size: 14px;
+        line-height: 1.75;
+    }
+
+    .hero-actions {
+        flex-wrap: wrap;
+    }
+
+    .hero-stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .hero-visual {
+        order: 2;
+    }
+
+    .pipeline {
+        grid-template-columns: 1fr;
+    }
+
+    .pipeline-connector {
+        display: none;
+    }
+
+    .pipeline-step {
+        min-height: auto;
+    }
+
+    .modules {
+        grid-template-columns: 1fr;
+    }
+
+    .upload-box {
+        padding: 44px 22px;
+    }
+
+    .upload-actions {
+        flex-direction: column;
+    }
+
+    .upload-actions > * {
+        width: min(100%, 360px);
+    }
+
+    .result-card {
+        padding: 22px;
+    }
+
+    .card-title {
+        align-items: flex-start;
+    }
+
+    .card-title .badge {
+        margin-left: 0;
+        margin-top: 4px;
+    }
+
+    .info-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .risk-card,
+    .premium-risk-card {
+        padding: 24px 18px;
+    }
+
+    .risk-main-content {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .risk-meter-wrap {
+        width: 100%;
+        display: flex;
+        justify-content: center;
+    }
+
+    .risk-live-status {
+        display: none;
+    }
+
+    .background-noise {
+        display: none;
+    }
+
+    .background-glow {
+        opacity: 0.55;
+    }
+
+    .ai-visual-card {
+        transform: none;
+    }
+
+    .module-card:hover,
+    .result-card:hover,
+    .pipeline-step:hover,
+    .stat-card:hover {
+        transform: translateY(-2px);
+    }
+}
+
+/* ------------------------------------------------------------------------
+   26. SMALL PHONE
+   ------------------------------------------------------------------------ */
+
+@media (max-width: 560px) {
+
+    .container {
+        width: calc(100% - 28px);
+    }
+
+    .navbar {
+        width: calc(100% - 18px);
+        padding: 9px 11px;
+    }
+
+    .logo {
+        width: 40px;
+        height: 40px;
+        border-radius: 13px;
+    }
+
+    .brand-text h2 {
+        font-size: 16px;
+    }
+
+    .system-status {
+        font-size: 9px;
+    }
+
+    .hero {
+        padding-top: 54px;
+        padding-bottom: 52px;
+    }
+
+    .hero h1 {
+        font-size: clamp(38px, 12vw, 52px);
+        line-height: 1.03;
+    }
+
+    .hero-tag {
+        font-size: 8px;
+        letter-spacing: 1px;
+    }
+
+    .hero-actions {
+        width: 100%;
+    }
+
+    .hero-actions > * {
+        width: 100%;
+    }
+
+    .hero-stats {
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+    }
+
+    .stat-card {
+        min-height: 74px;
+        padding: 12px 8px;
+    }
+
+    .section-heading h2 {
+        font-size: 30px;
+    }
+
+    .section-heading p {
+        font-size: 13px;
+        line-height: 1.7;
+    }
+
+    .upload-box h3 {
+        font-size: 23px;
+    }
+
+    #qrVerificationCard .qr-info-grid,
+    #qrVerificationCard .info-grid {
+        grid-template-columns: 1fr;
+    }
+
+    #riskBreakdownCard .risk-breakdown-row {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 5px;
+    }
+
+    .risk-meter {
+        transform: scale(0.90);
+    }
+
+    .risk-meter:hover {
+        transform: scale(0.92);
+    }
+}
+
+/* ------------------------------------------------------------------------
+   27. TOUCH DEVICES — REMOVE HEAVY HOVER EFFECTS
+   ------------------------------------------------------------------------ */
+
+@media (hover: none) and (pointer: coarse) {
+
+    .navbar:hover,
+    .upload-box:hover,
+    .module-card:hover,
+    .pipeline-step:hover,
+    .result-card:hover,
+    .stat-card:hover {
+        transform: none;
+    }
+
+    .brand:hover .logo {
+        transform: none;
+    }
+
+    .nav-center a:hover::after {
+        width: 0;
+    }
+
+    .result-card:hover .title-icon,
+    .module-card:hover .module-icon,
+    .pipeline-step:hover .pipeline-icon,
+    .face-verification-card:hover .face-circle,
+    .face-card:hover .face-circle {
+        transform: none;
+    }
+
+    .risk-meter:hover,
+    .premium-risk-card:hover .risk-meter {
+        transform: none;
+    }
+
+    .tampering-box::after,
+    .ai-visual-card::before,
+    .processing-card::before {
+        animation-duration: 9s;
+    }
+}
+
+/* ------------------------------------------------------------------------
+   28. LOW-POWER / REDUCED MOTION
+   ------------------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+
+    html {
+        scroll-behavior: auto;
+    }
+
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
+/* ------------------------------------------------------------------------
+   29. FINAL Z-INDEX / OVERFLOW SAFETY
+   ------------------------------------------------------------------------ */
+
+.navbar,
+.hero-content,
+.hero-visual,
+.section-heading,
+.upload-box,
+.processing-card,
+.result-header,
+.result-card,
+.risk-card {
+    isolation: isolate;
+}
+
+.navbar *,
+.hero *,
+.pipeline *,
+.module-card *,
+.upload-box *,
+.processing-card *,
+.result-card *,
+.risk-card * {
+    max-width: 100%;
+}
+
+.results.hidden,
+.processing.hidden,
+.file-preview.hidden,
+.analyze-btn.hidden {
+    pointer-events: none;
+}
+
+/* ------------------------------------------------------------------------
+   30. FINAL PRESENTATION FINISH
+   ------------------------------------------------------------------------ */
+
+.demo-divider {
+    opacity: 0.72;
+}
+
+.supported-documents {
+    opacity: 0.90;
+}
+
+.document-avatar {
+    box-shadow:
+        0 10px 28px rgba(91, 140, 255, 0.12);
+}
+
+.document-line {
+    transition:
+        opacity 0.25s ease,
+        transform 0.25s var(--presentation-ease);
+}
+
+.scanner-document:hover .document-line {
+    opacity: 0.95;
+}
+
+.scan-corner {
+    filter:
+        drop-shadow(0 0 8px rgba(91, 140, 255, 0.18));
+}
+
+.analysis-indicators {
+    gap: 10px;
+}
+
+.analysis-indicator {
+    border-color: rgba(255, 255, 255, 0.055);
+    background: rgba(255, 255, 255, 0.025);
+}
+
+.analysis-indicator:hover {
+    border-color: rgba(91, 140, 255, 0.16);
+    background: rgba(91, 140, 255, 0.035);
+}
