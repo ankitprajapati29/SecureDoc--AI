@@ -17990,3 +17990,167 @@ label:hover,
 /* =========================================================
    END PERFORMANCE OVERRIDE
    ========================================================= */
+
+/* ========================================================================
+   FINAL SMOOTH MOTION LAYER
+   Purpose: restore purposeful premium motion without bringing back the
+   heavy animation stack. Functional scanner motion is driven by TOP so it
+   cannot be cancelled by existing transform rules.
+   ======================================================================== */
+
+/* 1. HERO SCANNER — reliable continuous scan */
+.scanner-area {
+    position: relative;
+    overflow: hidden;
+}
+
+.scanner-area .scan-line,
+.scanner-area > .scan-line {
+    position: absolute !important;
+    left: 7% !important;
+    right: 7% !important;
+    top: 8% !important;
+    height: 2px !important;
+    z-index: 8 !important;
+    display: block !important;
+    pointer-events: none !important;
+    opacity: .88 !important;
+    transform: none !important;
+    background: linear-gradient(90deg, transparent 0%, rgba(180,208,255,.15) 12%, #b4d0ff 35%, #6f9dff 50%, #b4d0ff 65%, rgba(180,208,255,.15) 88%, transparent 100%) !important;
+    box-shadow: 0 0 7px rgba(91,140,255,.38), 0 0 18px rgba(91,140,255,.16) !important;
+    animation: secureDocScanTop 3.4s cubic-bezier(.45,0,.55,1) infinite !important;
+    animation-play-state: running !important;
+}
+
+@keyframes secureDocScanTop {
+    0%   { top: 8%; opacity: 0; }
+    8%   { opacity: .88; }
+    46%  { top: 88%; opacity: .88; }
+    54%  { top: 88%; opacity: .72; }
+    92%  { top: 8%; opacity: .72; }
+    100% { top: 8%; opacity: 0; }
+}
+
+/* Scanner edge/corner stays crisp while the line moves. */
+.scanner-area .scan-corner {
+    z-index: 9;
+    position: relative;
+}
+
+/* 2. HERO CARD — subtle breathing only, not a floating card */
+@keyframes secureDocHeroBreath {
+    0%, 100% { box-shadow: 0 22px 60px rgba(0,0,0,.30), 0 0 34px rgba(91,140,255,.055); }
+    50%      { box-shadow: 0 24px 64px rgba(0,0,0,.32), 0 0 42px rgba(91,140,255,.085); }
+}
+
+.ai-visual-card {
+    animation: secureDocHeroBreath 5.5s ease-in-out infinite !important;
+}
+
+/* 3. Scanner document — tiny depth change synced to the visual, no layout shift */
+@keyframes secureDocDocumentFloat {
+    0%, 100% { transform: translate(-50%, -50%) translateY(0); }
+    50%      { transform: translate(-50%, -50%) translateY(-3px); }
+}
+
+.scanner-document {
+    animation: secureDocDocumentFloat 5s ease-in-out infinite !important;
+}
+
+/* 4. Hero CTA — restrained attention cue */
+@keyframes secureDocButtonGlow {
+    0%, 100% { box-shadow: 0 8px 24px rgba(91,140,255,.16); }
+    50%      { box-shadow: 0 10px 28px rgba(91,140,255,.22); }
+}
+
+.primary-btn,
+.analyze-btn {
+    animation: secureDocButtonGlow 3.8s ease-in-out infinite !important;
+}
+
+.primary-btn:hover,
+.analyze-btn:hover {
+    animation-play-state: paused !important;
+}
+
+/* 5. Small status dots — gentle pulse only where it communicates live state */
+@keyframes secureDocStatusPulse {
+    0%, 100% { opacity: .72; transform: scale(1); }
+    50%      { opacity: 1; transform: scale(1.12); }
+}
+
+.ai-visual-card .live-dot,
+.ai-visual-card .status-dot,
+.ai-visual-card .mini-status {
+    animation: secureDocStatusPulse 2.2s ease-in-out infinite !important;
+}
+
+/* 6. Stat cards — premium hover motion without permanent animation */
+.stat-card {
+    transition: transform .22s cubic-bezier(.2,.8,.2,1), border-color .22s ease, box-shadow .22s ease !important;
+}
+
+.stat-card:hover {
+    transform: translateY(-3px) !important;
+}
+
+/* 7. Pipeline/module cards — reveal depth on interaction only */
+.pipeline-step,
+.module-card,
+.risk-signal-row {
+    transition: transform .2s ease, border-color .2s ease, background-color .2s ease !important;
+}
+
+.pipeline-step:hover,
+.module-card:hover,
+.risk-signal-row:hover {
+    transform: translateY(-2px) !important;
+}
+
+/* 8. Processing state — use one lightweight sweep only while processing */
+.processing-card {
+    position: relative;
+    overflow: hidden;
+}
+
+.processing-card::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -28%;
+    width: 18%;
+    pointer-events: none;
+    opacity: .22;
+    background: linear-gradient(90deg, transparent, rgba(140,180,255,.32), transparent);
+    transform: skewX(-18deg);
+    animation: secureDocProcessingSweep 2.8s ease-in-out infinite !important;
+}
+
+@keyframes secureDocProcessingSweep {
+    0%   { left: -28%; opacity: 0; }
+    18%  { opacity: .22; }
+    82%  { opacity: .22; }
+    100% { left: 115%; opacity: 0; }
+}
+
+/* 9. Results — short entrance, then completely static */
+.results-section:not(.hidden),
+.results:not(.hidden) {
+    animation: secureDocResultIn .28s ease-out both !important;
+}
+
+/* 10. Accessibility / low-power preference */
+@media (prefers-reduced-motion: reduce) {
+    .ai-visual-card,
+    .scanner-document,
+    .primary-btn,
+    .analyze-btn,
+    .scanner-area .scan-line,
+    .processing-card::after,
+    .ai-visual-card .live-dot,
+    .ai-visual-card .status-dot,
+    .ai-visual-card .mini-status {
+        animation: none !important;
+    }
+}
