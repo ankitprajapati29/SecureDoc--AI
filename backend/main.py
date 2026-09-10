@@ -58,7 +58,7 @@ except Exception:
 
 app = FastAPI(
     title="SecureDoc AI Backend",
-    version="5.1.0",
+    version="5.2.0",
 )
 
 
@@ -103,8 +103,9 @@ MAX_OCR_TEXT_LENGTH = 25000
 
 MAX_PDF_OCR_PAGES = 5
 
-OCR_TARGET_WIDTH = 2000
-OCR_MAX_DIMENSION = 3200
+OCR_TARGET_WIDTH = 1400
+OCR_MAX_DIMENSION = 2200
+OCR_TESSERACT_TIMEOUT = 7
 
 # ============================================================
 # DOCUMENT LABELS
@@ -403,7 +404,7 @@ def resize_for_ocr(
 
         scale = min(
             target_width / width,
-            3.5,
+            1.5,
         )
 
     if (
@@ -990,6 +991,7 @@ def run_ocr_pass(
                 output_type=(
                     pytesseract.Output.DICT
                 ),
+                timeout=OCR_TESSERACT_TIMEOUT,
             )
         )
 
@@ -1366,13 +1368,20 @@ def detect_document_type(text):
         upper,
         [
             "INCOME TAX DEPARTMENT",
+            "INCOM TAX DEPARTMENT",
+            "INCOME TAX DEPARTM ENT",
+            "TAX DEPARTMENT",
             "PERMANENT ACCOUNT NUMBER",
+            "PERMANENT ACCOUNT NUMBER CARD",
+            "PERMANENT ACCOUNT",
             "INCOME TAX",
+            "GOVT. OF INDIA",
+            "GOVT OF INDIA",
         ],
     )
 
     if re.search(
-        r"\b[A-Z]{5}[0-9]{4}[A-Z]\b",
+        r"(?<![A-Z0-9])[A-Z]{5}\s*[0-9]{4}\s*[A-Z](?![A-Z0-9])",
         upper,
     ):
         pan_score += 3
@@ -2074,16 +2083,25 @@ def extract_aadhaar_number(text):
 
 def extract_pan_number(text):
 
-    match = re.search(
-        r"\b([A-Z]{5}[0-9]{4}[A-Z])\b",
-        text.upper(),
-    )
+    if not text:
+        return None
 
-    return (
-        match.group(1)
-        if match
-        else None
-    )
+    upper = normalize_text(text).upper()
+
+    # Standard PAN format, including OCR-inserted spaces.
+    patterns = [
+        r"(?<![A-Z0-9])([A-Z]{5}\s*[0-9]{4}\s*[A-Z])(?![A-Z0-9])",
+        r"(?:PERMANENT\s+ACCOUNT\s+NUMBER(?:\s+CARD)?|PAN(?:\s+NO)?)[^A-Z0-9]{0,12}([A-Z]{5}\s*[0-9]{4}\s*[A-Z])",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, upper, re.IGNORECASE)
+        if match:
+            value = re.sub(r"[^A-Z0-9]", "", match.group(1).upper())
+            if re.fullmatch(r"[A-Z]{5}[0-9]{4}[A-Z]", value):
+                return value
+
+    return None
 
 
 
@@ -2573,6 +2591,9 @@ def extract_name_from_text(text):
             "authority",
             "government",
             "department",
+            "father",
+            "father's name",
+            "fathers name",
             "transport",
             "licence to drive",
             "license to drive",
@@ -2948,6 +2969,31 @@ def extract_name_from_text(text):
 
     return None
 
+def extract_father_name(text):
+    if not text:
+        return None
+    lines = split_clean_lines(text)
+    label_re = re.compile(r"(?i)^(?:father(?:'s)?\s*name|father\s*name|father|fath?er|ather(?:'s)?\s*name)\s*[:.\-/]?\s*(.*)$")
+    for i, line in enumerate(lines):
+        m = label_re.search(line.strip())
+        if not m:
+            continue
+        value = clean_field_value(m.group(1))
+        if value and is_valid_name(value):
+            return normalize_name(value)
+        if i + 1 < len(lines):
+            value = clean_field_value(lines[i + 1])
+            if value and is_valid_name(value) and not re.search(r"\d", value):
+                return normalize_name(value)
+    # OCR often turns "Father's Name" into a partial label.
+    m = re.search(r"(?is)father(?:'s)?\s*name.{0,50}?(?:\n|:|-)\s*([A-Z][A-Z .'-]{2,40})", text)
+    if m:
+        value = normalize_name(m.group(1))
+        if value and is_valid_name(value):
+            return value
+    return None
+
+
 # =========================================================
 # FIELD EXTRACTION FROM ONE OCR CANDIDATE
 # =========================================================
@@ -2966,6 +3012,7 @@ def extract_fields_from_text(
 
     structured = {
         "name": extract_name_from_text(text),
+        "father_name": extract_father_name(text),
         "document": detection.get("document_label", "Unknown Document"),
         "document_category": category,
         "aadhaar_number": extract_aadhaar_number(text),
@@ -3022,7 +3069,7 @@ def field_value_is_valid(
     if value is None:
         return False
 
-    if field == "name":
+    if field in {"name", "father_name"}:
 
         return is_valid_name(
             value
@@ -3175,6 +3222,7 @@ def build_field_consensus(
 
     fields = [
         "name",
+        "father_name",
         "aadhaar_number",
         "pan_number",
         "driving_licence_number",
@@ -3254,6 +3302,11 @@ def build_field_consensus(
                         confidence,
                     )
                 )
+                if candidate.get("variant") in {"identity_zone_psm6", "pan_name_line_psm6"}:
+                    vote_score += 45
+
+            if field == "father_name" and candidate.get("variant") == "pan_father_line_psm6":
+                vote_score += 60
 
             field_votes[
                 field
@@ -3271,6 +3324,7 @@ def build_field_consensus(
 
     final_data = {
         "name": None,
+        "father_name": None,
         "document": final_detection.get(
             "document_label",
             "Unknown Document",
@@ -3392,164 +3446,154 @@ def build_field_consensus(
 # OCR EXTRACTION PIPELINE — FAST + RELIABLE TESSERACT OCR
 # ================================================================
 
+def merge_ocr_text_candidates(candidates, max_length=MAX_OCR_TEXT_LENGTH):
+    """Merge useful unique OCR lines without replacing the full-document text."""
+    merged = []
+    seen = set()
+    for candidate in candidates:
+        text = normalize_text(candidate.get("text", ""))
+        if not text:
+            continue
+        for line in text.splitlines():
+            line = normalize_single_line(line)
+            if len(line) < 2:
+                continue
+            key = re.sub(r"[^a-z0-9]+", "", line.lower())
+            if not key or key in seen:
+                continue
+            alnum_ratio = sum(ch.isalnum() for ch in line) / max(len(line), 1)
+            if alnum_ratio < 0.22 and not re.search(r"\d", line):
+                continue
+            seen.add(key)
+            merged.append(line)
+    return normalize_text("\n".join(merged))[:max_length]
+
+
 def extract_ocr_data(image):
     """
-    Fast + reliable Tesseract OCR.
+    Fast + accurate OCR pipeline.
 
-    Strategy:
-    1. One fast PSM 6 OCR pass for normal documents.
-    2. PSM 11 fallback only when OCR is genuinely weak.
-    3. No unnecessary OCR variants.
-    4. Preserve existing document detection and field extraction.
+    - Full-document PSM 6 is the primary readable-text pass.
+    - A small number of document-aware crops recover fields that are
+      commonly missed on ID cards (PAN/DOB/name/father name/QR areas).
+    - PSM 11 is used only when the full-document OCR is weak.
+    - The final displayed text always comes from the full document OCR,
+      while structured fields can use evidence from the targeted crops.
     """
-
     language = get_ocr_language()
     candidates = []
     original_image = None
 
     try:
-        # --------------------------------------------------------
-        # PREPARE OCR IMAGE
-        # --------------------------------------------------------
         original_image = fix_orientation(image).convert("RGB")
-        original_image = resize_for_ocr(original_image)
+        # Do not upscale small phone/document images for the full OCR pass.
+        # Upscaling the entire image slows Tesseract and can amplify JPEG noise.
+        if max(original_image.size) > 1400:
+            original_image = resize_for_ocr(original_image)
+        width, height = original_image.size
 
-        # --------------------------------------------------------
-        # ADD OCR RESULT
-        # --------------------------------------------------------
-        def add_candidate(result, variant_name, config):
+        def add_candidate(result, variant_name, is_full_document=True):
             text = normalize_text(result.get("text", ""))
-
             if not text:
                 return
-
             result["variant"] = variant_name
             result["engine"] = "tesseract"
-
+            result["is_full_document"] = is_full_document
             detection = detect_document_type(text)
-
-            structured = extract_fields_from_text(
-                text,
-                detection,
-            )
-
-            # OCR quality score
-            score = text_quality_score(
-                text,
-                result.get("confidence", 0),
-            )
-
-            # Document type detected
+            structured = extract_fields_from_text(text, detection)
+            score = text_quality_score(text, result.get("confidence", 0))
             if detection.get("document_category") != "UNKNOWN":
-                score += 5
-
-            # Important document fields
+                score += 8
             important_fields = (
-                "aadhaar_number",
-                "pan_number",
-                "driving_licence_number",
-                "passport_number",
-                "visa_number",
-                "voter_id_number",
-                "gstin",
+                "aadhaar_number", "pan_number", "driving_licence_number",
+                "passport_number", "visa_number", "voter_id_number", "gstin",
             )
-
-            found_fields = sum(
-                1
-                for field in important_fields
-                if structured.get(field)
-            )
-
-            score += found_fields * 8
-
+            found_fields = sum(1 for field in important_fields if structured.get(field))
+            score += found_fields * 10
+            if structured.get("name"):
+                score += 4
+            if structured.get("father_name"):
+                score += 4
             result["score"] = round(score, 2)
             result["detection"] = detection
             result["structured"] = structured
-
             candidates.append(result)
 
-        # --------------------------------------------------------
-        # PASS 1 — FAST STANDARD OCR
-        # --------------------------------------------------------
-        result = run_ocr_pass(
-            original_image,
-            "--oem 3 --psm 6",
-            language,
-        )
+        # PASS 1: full document, optimized resolution.
+        full = run_ocr_pass(original_image, "--oem 3 --psm 6", language)
+        add_candidate(full, "full_psm6", True)
 
-        add_candidate(
-            result,
-            "original_psm6",
-            "--oem 3 --psm 6",
-        )
+        # Two small focused OCR crops recover tiny ID-card fields.
+        # The second stage becomes document-aware after the full-card pass.
+        if width >= 500 and height >= 300:
+            focused_boxes = [
+                ("identity_zone_psm6", (0.02, 0.42, 0.82, 0.96)),
+                ("number_zone_psm6", (0.18, 0.25, 0.84, 0.92)),
+            ]
+            for variant_name, (x1, y1, x2, y2) in focused_boxes:
+                text_crop = original_image.crop((
+                    int(width * x1), int(height * y1),
+                    int(width * x2), int(height * y2),
+                ))
+                if max(text_crop.size) < 1500:
+                    scale = min(1500 / max(text_crop.size), 2.0)
+                    text_crop = text_crop.resize(
+                        (max(1, int(text_crop.width * scale)),
+                         max(1, int(text_crop.height * scale))),
+                        Image.Resampling.LANCZOS,
+                    )
+                crop_result = run_ocr_pass(text_crop, "--oem 3 --psm 6", language)
+                add_candidate(crop_result, variant_name, False)
+                safe_close(text_crop)
 
-        # --------------------------------------------------------
-        # CHECK FIRST RESULT
-        # --------------------------------------------------------
-        best = max(
-            candidates,
-            key=lambda item: item.get("score", -999),
+            # PAN cards have very small Name/Father's Name rows. Once the
+            # preliminary evidence says PAN, use two tiny single-purpose OCR
+            # regions. This is faster than running many full-image variants and
+            # substantially improves the common PAN sample shown in demos.
+            preliminary_text = "\n".join(c.get("text", "") for c in candidates)
+            preliminary_category = detect_document_type(preliminary_text).get("document_category")
+            if preliminary_category == "PAN_CARD":
+                pan_boxes = [
+                    ("pan_name_line_psm6", (0.03, 0.52, 0.72, 0.68)),
+                    ("pan_father_line_psm6", (0.03, 0.66, 0.78, 0.80)),
+                ]
+                for variant_name, (x1, y1, x2, y2) in pan_boxes:
+                    text_crop = original_image.crop((
+                        int(width * x1), int(height * y1),
+                        int(width * x2), int(height * y2),
+                    ))
+                    scale = min(1500 / max(text_crop.size), 3.0)
+                    text_crop = text_crop.resize(
+                        (max(1, int(text_crop.width * scale)),
+                         max(1, int(text_crop.height * scale))),
+                        Image.Resampling.LANCZOS,
+                    )
+                    pan_config = "--oem 3 --psm 11" if variant_name in {"pan_name_line_psm6", "pan_father_line_psm6"} else "--oem 3 --psm 6"
+                    crop_result = run_ocr_pass(text_crop, pan_config, language)
+                    add_candidate(crop_result, variant_name, False)
+                    safe_close(text_crop)
+
+        full_candidates = [c for c in candidates if c.get("is_full_document")]
+        best_full = max(
+            full_candidates,
+            key=lambda item: (item.get("score", -999), item.get("confidence", 0), len(item.get("text", ""))),
             default=None,
         )
-
-        confidence = (
-            float(best.get("confidence", 0) or 0)
-            if best
-            else 0.0
+        confidence = float(best_full.get("confidence", 0) or 0) if best_full else 0.0
+        text_length = len(normalize_text(best_full.get("text", ""))) if best_full else 0
+        crop_has_useful_evidence = any(
+            not c.get("is_full_document")
+            and (c.get("detection", {}).get("document_category") != "UNKNOWN"
+                 or any(c.get("structured", {}).get(k) for k in ("pan_number", "aadhaar_number", "passport_number", "driving_licence_number", "voter_id_number", "gstin")))
+            for c in candidates
         )
 
-        category = (
-            best.get("detection", {}).get(
-                "document_category",
-                "UNKNOWN",
-            )
-            if best
-            else "UNKNOWN"
-        )
+        # PASS 2: sparse-text fallback only if both full OCR and targeted OCR
+        # failed to provide useful evidence. This keeps normal scans fast.
+        if (best_full is None or confidence < 42 or text_length < 35) and not crop_has_useful_evidence:
+            sparse = run_ocr_pass(original_image, "--oem 3 --psm 11", language)
+            add_candidate(sparse, "full_psm11", True)
 
-        text_length = (
-            len(
-                normalize_text(
-                    best.get("text", "")
-                )
-            )
-            if best
-            else 0
-        )
-
-        # --------------------------------------------------------
-        # FAST FALLBACK DECISION
-        # --------------------------------------------------------
-        #
-        # IMPORTANT:
-        # Do NOT run PSM 11 merely because an important field
-        # was not detected. Field extraction can fail even when
-        # OCR itself is good.
-        #
-        # PSM 11 is used only when the OCR result is actually weak.
-        # --------------------------------------------------------
-        needs_second_pass = (
-            best is None
-            or confidence < 45
-            or text_length < 25
-        )
-
-        if needs_second_pass:
-            result = run_ocr_pass(
-                original_image,
-                "--oem 3 --psm 11",
-                language,
-            )
-
-            add_candidate(
-                result,
-                "original_psm11",
-                "--oem 3 --psm 11",
-            )
-
-        # --------------------------------------------------------
-        # NO OCR RESULT
-        # --------------------------------------------------------
         if not candidates:
             return {
                 "extracted_text": "",
@@ -3566,68 +3610,49 @@ def extract_ocr_data(image):
                 "candidate_summary": [],
             }
 
-        # --------------------------------------------------------
-        # FINAL BEST OCR RESULT
-        # --------------------------------------------------------
-        candidates.sort(
-            key=lambda item: (
-                item.get("score", -999),
-                item.get("confidence", 0),
-                len(
-                    normalize_text(
-                        item.get("text", "")
-                    )
-                ),
-            ),
-            reverse=True,
+        # Detect the document using all useful OCR evidence. This fixes cases
+        # where a full pass misses one header but the targeted crop sees it.
+        evidence_text = "\n".join(
+            c.get("text", "") for c in candidates
+            if c.get("text")
         )
+        final_detection = detect_document_type(evidence_text)
 
-        best = candidates[0]
-
-        # --------------------------------------------------------
-        # FINAL DOCUMENT DETECTION
-        # --------------------------------------------------------
-        final_detection = detect_document_type(
-            best.get("text", "")
-        )
-
-        # --------------------------------------------------------
-        # RE-EXTRACT STRUCTURED FIELDS
-        # --------------------------------------------------------
         for candidate in candidates:
-            candidate["structured"] = (
-                extract_fields_from_text(
-                    candidate.get("text", ""),
-                    final_detection,
-                )
+            candidate["structured"] = extract_fields_from_text(
+                candidate.get("text", ""), final_detection
             )
 
-        # --------------------------------------------------------
-        # FIELD CONSENSUS
-        # --------------------------------------------------------
-        structured_data, field_confidence = (
-            build_field_consensus(
-                candidates,
-                final_detection,
-            )
+        structured_data, field_confidence = build_field_consensus(
+            candidates, final_detection
         )
 
-        # --------------------------------------------------------
-        # FINAL TEXT
-        # --------------------------------------------------------
-        raw_ocr_text = normalize_text(
-            best.get("text", "")
-        )[:MAX_OCR_TEXT_LENGTH]
+        # IMPORTANT: return the best FULL document OCR as extracted_text.
+        # Never replace it with the small structured display summary.
+        full_candidates = [c for c in candidates if c.get("is_full_document")]
+        if full_candidates:
+            best_full = max(
+                full_candidates,
+                key=lambda item: (
+                    item.get("score", -999),
+                    item.get("confidence", 0),
+                    len(normalize_text(item.get("text", ""))),
+                ),
+            )
+        else:
+            best_full = max(candidates, key=lambda item: item.get("score", -999))
 
+        full_document_text = normalize_text(best_full.get("text", ""))[:MAX_OCR_TEXT_LENGTH]
+        merged_ocr_text = merge_ocr_text_candidates(candidates)
+        raw_ocr_text = merged_ocr_text or full_document_text
         candidate_summary = [
             {
                 "variant": candidate.get("variant"),
                 "engine": candidate.get("engine"),
                 "confidence": candidate.get("confidence"),
                 "score": candidate.get("score"),
-                "document": final_detection.get(
-                    "document_label"
-                ),
+                "document": final_detection.get("document_label"),
+                "full_document": bool(candidate.get("is_full_document")),
             }
             for candidate in candidates[:8]
         ]
@@ -3635,17 +3660,13 @@ def extract_ocr_data(image):
         return {
             "extracted_text": raw_ocr_text,
             "raw_ocr_text": raw_ocr_text,
-            "ocr_confidence": float(
-                best.get("confidence", 0) or 0
-            ),
-            "ocr_status": (
-                "TEXT_DETECTED"
-                if raw_ocr_text
-                else "NO_TEXT_DETECTED"
-            ),
+            "full_document_ocr_text": full_document_text,
+            "display_text": build_display_text(structured_data),
+            "ocr_confidence": float(best_full.get("confidence", 0) or 0),
+            "ocr_status": "TEXT_DETECTED" if raw_ocr_text else "NO_TEXT_DETECTED",
             "ocr_language": language,
             "ocr_engine": "tesseract",
-            "ocr_variant": best.get("variant"),
+            "ocr_variant": best_full.get("variant"),
             "ocr_candidates_tested": len(candidates),
             "document_detection": final_detection,
             "structured_data": structured_data,
@@ -3654,11 +3675,7 @@ def extract_ocr_data(image):
         }
 
     except Exception as error:
-        print(
-            "TESSERACT OCR PIPELINE ERROR:",
-            str(error),
-        )
-
+        print("TESSERACT OCR PIPELINE ERROR:", str(error))
         return {
             "extracted_text": "",
             "raw_ocr_text": "",
@@ -3673,12 +3690,9 @@ def extract_ocr_data(image):
             "field_confidence": {},
             "candidate_summary": [],
         }
-
     finally:
-        # --------------------------------------------------------
-        # FREE MEMORY
-        # --------------------------------------------------------
         safe_close(original_image)
+
 # ============================================================
 # DISPLAY TEXT
 # ============================================================
@@ -3692,6 +3706,12 @@ def build_display_text(
             "Name",
             structured.get(
                 "name"
+            ),
+        ),
+        (
+            "Father's Name",
+            structured.get(
+                "father_name"
             ),
         ),
         (
@@ -4709,10 +4729,9 @@ def analyze_image(
             "image_quality": quality,
             "face_detection": face_detection,
 
-            "extracted_text": (
-                display_text
-                or raw_text
-            ),
+            "extracted_text": raw_text,
+
+            "display_text": display_text or raw_text,
 
             "raw_ocr_text": raw_text,
 
@@ -5086,10 +5105,9 @@ def analyze_pdf(
 
             "image_quality": None,
 
-            "extracted_text": (
-                display_text
-                or combined_text
-            ),
+            "extracted_text": combined_text,
+
+            "display_text": display_text or combined_text,
 
             "raw_ocr_text": (
                 combined_text
@@ -5542,6 +5560,49 @@ def detect_faces_in_document(image):
         return result
 
 
+def _detect_qr_presence(image):
+    """Cheap visual QR-presence check used when decoding fails."""
+    if not CV2_AVAILABLE or cv2 is None:
+        return False, 0
+    try:
+        rgb = image.convert("RGB")
+        width, height = rgb.size
+        if width < 200 or height < 150:
+            return False, 0
+        # QR codes on common ID cards are often on the right side.
+        crop = rgb.crop((int(width * 0.55), int(height * 0.10), width, int(height * 0.90)))
+        if max(crop.size) < 700:
+            scale = min(900 / max(crop.size), 2.0)
+            crop = crop.resize((int(crop.width * scale), int(crop.height * scale)), Image.Resampling.LANCZOS)
+        gray = cv2.cvtColor(np.asarray(crop, dtype=np.uint8), cv2.COLOR_RGB2GRAY)
+        best_finder_like = 0
+        # A few fixed thresholds are still cheap, and work better on the
+        # blue/printed backgrounds found on government ID cards.
+        for threshold in (90, 110, 120, 130):
+            binary = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)[1]
+            contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            finder_like = 0
+            if hierarchy is not None:
+                h = hierarchy[0]
+                for i, contour in enumerate(contours):
+                    x, y, w, hh = cv2.boundingRect(contour)
+                    if not (10 <= w <= min(260, gray.shape[1] // 2) and 10 <= hh <= min(260, gray.shape[0] // 2)):
+                        continue
+                    ratio = w / max(hh, 1)
+                    if not (0.70 <= ratio <= 1.30):
+                        continue
+                    area = cv2.contourArea(contour)
+                    if area < 20:
+                        continue
+                    child = h[i][2]
+                    if child != -1 and h[child][2] != -1:
+                        finder_like += 1
+            best_finder_like = max(best_finder_like, finder_like)
+        return best_finder_like >= 2, best_finder_like
+    except Exception:
+        return False, 0
+
+
 def analyze_qr_signal(image, structured):
     result = {
         "available": False,
@@ -5552,17 +5613,48 @@ def analyze_qr_signal(image, structured):
     if not CV2_AVAILABLE or cv2 is None or not hasattr(cv2, "QRCodeDetector"):
         return result
     try:
-        array = np.ascontiguousarray(np.asarray(image.convert("RGB"), dtype=np.uint8))
-        detector = cv2.QRCodeDetector()
-        data, points, _ = detector.detectAndDecode(array)
-        if not data:
-            result["available"] = True
-            result["status"] = "NOT_DECODED"
-            return result
         result["available"] = True
+        rgb = image.convert("RGB")
+        array = np.ascontiguousarray(np.asarray(rgb, dtype=np.uint8))
+        detector = cv2.QRCodeDetector()
+
+        attempts = [array]
+        h, w = array.shape[:2]
+        # A small right-side crop is much easier for QR detectors on ID cards.
+        if w >= 300 and h >= 200:
+            qr_crop = array[int(h * 0.08):int(h * 0.92), int(w * 0.52):int(w * 0.99)]
+            if max(qr_crop.shape[:2]) < 1000:
+                scale = min(1000 / max(qr_crop.shape[:2]), 2.5)
+                qr_crop = cv2.resize(qr_crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+            attempts.append(np.ascontiguousarray(qr_crop))
+
+        data = ""
+        for candidate in attempts:
+            try:
+                decoded, points, _ = detector.detectAndDecode(candidate)
+                if decoded:
+                    data = decoded
+                    break
+            except Exception:
+                continue
+
+        if not data:
+            present, finder_count = _detect_qr_presence(rgb)
+            if present:
+                result["status"] = "PRESENT_NOT_DECODED"
+                result["presence_confidence"] = min(99, 55 + finder_count * 12)
+                result["finder_patterns_detected"] = finder_count
+                result["description"] = "QR-like code detected, but its payload could not be decoded from this image."
+            else:
+                result["status"] = "NOT_DECODED"
+                result["description"] = "No readable QR payload was detected in the document."
+            return result
+
         result["decoded"] = True
         result["status"] = "DECODED"
         result["data_length"] = len(data)
+        # Keep payload out of the UI by default; expose only a short fingerprint.
+        result["data_preview"] = data[:80]
         aadhaar = re.sub(r"\D", "", str(structured.get("aadhaar_number") or ""))
         qr_digits = re.sub(r"\D", "", data)
         if len(aadhaar) == 12 and len(qr_digits) >= 12:
@@ -5587,12 +5679,27 @@ def analyze_image(file_content):
         # Face detection already runs in the base image analysis.
         # Reuse that result here to avoid a duplicate pass.
         data["metadata_analysis"] = analyze_metadata_tampering(data.get("metadata") or {})
-        data["ela"] = perform_error_level_analysis(image)
-        data["region_consistency"] = analyze_image_region_consistency(image)
+
+        # Forensics do not need the original multi-megapixel image. A bounded
+        # working copy removes a large amount of CPU cost without changing
+        # the OCR result above.
+        forensic_image = image.copy()
+        max_side = 1400
+        if max(forensic_image.size) > max_side:
+            scale = max_side / max(forensic_image.size)
+            forensic_image = forensic_image.resize(
+                (max(1, int(forensic_image.width * scale)),
+                 max(1, int(forensic_image.height * scale))),
+                Image.Resampling.LANCZOS,
+            )
+
+        data["ela"] = perform_error_level_analysis(forensic_image)
+        data["region_consistency"] = analyze_image_region_consistency(forensic_image)
         data["qr_analysis"] = analyze_qr_signal(
-            image,
+            forensic_image,
             data.get("structured_data") or {},
         )
+        safe_close(forensic_image)
         safe_close(image)
     except Exception as error:
         data["forensic_error"] = str(error)
@@ -5636,6 +5743,9 @@ def calculate_risk(file_format_valid, structure_valid, file_size, analysis):
 
     category = analysis.get("document_category", "UNKNOWN")
     structured = analysis.get("structured_data") or {}
+    if category == "UNKNOWN":
+        score += 10
+        signals.append("Document type could not be confidently identified")
     if category == "AADHAAR_CARD":
         aadhaar = re.sub(r"\D", "", str(structured.get("aadhaar_number") or ""))
         if len(aadhaar) == 12:
@@ -5708,7 +5818,7 @@ def home():
             "SecureDoc AI Backend is Running!"
         ),
         "status": "online",
-        "version": "5.1.0",
+        "version": "5.2.0",
         "phase": (
             "Layout-aware multi-pass OCR "
             "with field-wise consensus extraction"
@@ -5760,7 +5870,7 @@ def health():
         "paddleocr_error": (
             _PADDLE_ENGINE_ERROR
         ),
-        "backend_version": "5.1.0",
+        "backend_version": "5.2.0",
     }
 
 
