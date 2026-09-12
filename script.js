@@ -1405,44 +1405,57 @@ Waiting for OCR analysis...</pre>
 
 
         return validationResults.map(
-            item => {
+    item => {
 
-                return {
+        const label =
+            cleanValue(
+                item.name ||
+                item.label ||
+                item.check ||
+                item.field
+            ) ||
+            "Validation check";
 
-                    label:
+        let status =
+            normalizeStatus(
+                item.status ||
+                item.result ||
+                item.value,
 
-                        cleanValue(
+                "REVIEW REQUIRED"
+            );
 
-                            item.name ||
+        if (
+            label
+                .toLowerCase()
+                .includes("tampering")
+        ) {
 
-                            item.label ||
+            const tampering =
+                data.tampering || {};
 
-                            item.check ||
+            const tamperingStatus =
+                normalizeStatus(
+                    tampering.status ||
+                    tampering.result ||
+                    "",
+                    "LOW"
+                );
 
-                            item.field
-
-                        ) ||
-
-                        "Validation check",
-
-
-                    status:
-
-                        normalizeStatus(
-
-                            item.status ||
-
-                            item.result ||
-
-                            item.value,
-
-                            "REVIEW REQUIRED"
-
-                        )
-
-                };
+            if (
+                tamperingStatus ===
+                "CRITICAL"
+            ) {
+                status = "CRITICAL";
             }
-        );
+        }
+
+        return {
+            label,
+            status
+        };
+    }
+);
     }
 
 
