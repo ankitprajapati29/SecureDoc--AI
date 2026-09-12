@@ -2222,15 +2222,21 @@ if (!Number.isFinite(score)) {
    CRITICAL TAMPERING + CHECKSUM
 */
 
-const tamperingCritical =
-    data.tampering?.detected === true ||
+const tamperingRawStatus =
     String(
         data.tampering?.status ||
         data.tampering?.result ||
         ""
-    )
-        .toUpperCase()
-        .includes("CRITICAL");
+    );
+
+const tamperingCritical =
+    data.tampering?.detected === true ||
+    normalizeStatus(
+        tamperingRawStatus,
+        data.tampering?.detected === true
+            ? "CRITICAL"
+            : "NO CRITICAL SIGNAL"
+    ) === "CRITICAL";
 
 const validationItems =
     getValidationItems(
