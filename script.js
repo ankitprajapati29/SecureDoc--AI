@@ -2225,7 +2225,9 @@ if (!Number.isFinite(score)) {
 const tamperingCritical =
     data.tampering?.detected === true ||
     String(
-        data.tampering?.status || ""
+        data.tampering?.status ||
+        data.tampering?.result ||
+        ""
     )
         .toUpperCase()
         .includes("CRITICAL");
