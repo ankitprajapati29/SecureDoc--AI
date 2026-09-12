@@ -2532,18 +2532,29 @@ else if (!level) {
         data.tampering || {};
 
     let tamperingStatus =
-        "LOW";
+    "LOW";
 
-    if (
-        tampering.detected === true ||
-        signalContains("tampering") ||
-        signalContains("editing-software") ||
-        signalContains("recompression") ||
-        signalContains("inconsistent image")
-    ) {
-        tamperingStatus =
-            "REVIEW";
-    }
+const normalizedTamperingStatus =
+    normalizeStatus(
+        tampering.status ||
+        tampering.result ||
+        "",
+        tampering.detected === true
+            ? "CRITICAL"
+            : "LOW"
+    );
+
+if (
+    normalizedTamperingStatus === "CRITICAL" ||
+    tampering.detected === true ||
+    signalContains("tampering") ||
+    signalContains("editing-software") ||
+    signalContains("recompression") ||
+    signalContains("inconsistent image")
+) {
+    tamperingStatus =
+        "CRITICAL";
+}
 
 
     /*
