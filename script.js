@@ -2198,35 +2198,95 @@ function renderRisk(data) {
     const risk =
         data.risk || {};
 
-    let score =
-        Number(
-            risk.score ||
-            risk.risk_score
+   let score =
+    Number(
+        risk.score ||
+        risk.risk_score
+    );
+
+/*
+   FALLBACK ONLY IF BACKEND
+   SCORE IS NOT AVAILABLE
+*/
+
+if (!Number.isFinite(score)) {
+
+    score =
+        calculateFallbackRisk(
+            data
         );
+}
 
-    /*
-       FALLBACK ONLY IF BACKEND
-       SCORE IS NOT AVAILABLE
-    */
 
-    if (!Number.isFinite(score)) {
+/*
+   CRITICAL TAMPERING + CHECKSUM
+*/
 
-        score =
-            calculateFallbackRisk(
-                data
-            );
-    }
+const tamperingCritical =
+    data.tampering?.detected === true ||
+    String(
+        data.tampering?.status || ""
+    )
+        .toUpperCase()
+        .includes("CRITICAL");
+
+const validationItems =
+    getValidationItems(
+        data
+    );
+
+const checksumFailed =
+    validationItems.some(
+        item =>
+            String(item.label)
+                .toLowerCase()
+                .includes("checksum") &&
+            String(item.status)
+                .toUpperCase()
+                === "INVALID"
+    );
+
+
+/*
+   MINIMUM RISK RULE
+*/
+
+if (
+    tamperingCritical &&
+    checksumFailed
+) {
 
     score =
         Math.max(
-            0,
-            Math.min(
-                100,
-                Math.round(score)
-            )
+            score,
+            95
         );
 
+}
+else if (
+    tamperingCritical
+) {
 
+    score =
+        Math.max(
+            score,
+            92
+        );
+}
+
+
+/*
+   FINAL SCORE LIMIT
+*/
+
+score =
+    Math.max(
+        0,
+        Math.min(
+            100,
+            Math.round(score)
+        )
+    );
     let level =
         cleanValue(
             risk.level ||
@@ -2234,18 +2294,26 @@ function renderRisk(data) {
         );
 
 
-    if (!level) {
+   if (
+    tamperingCritical
+) {
 
-        if (score <= 25) {
-            level = "LOW RISK";
-        }
-        else if (score <= 60) {
-            level = "MEDIUM RISK";
-        }
-        else {
-            level = "HIGH RISK";
-        }
+    level =
+        "HIGH RISK";
+
+}
+else if (!level) {
+
+    if (score <= 25) {
+        level = "LOW RISK";
     }
+    else if (score <= 60) {
+        level = "MEDIUM RISK";
+    }
+    else {
+        level = "HIGH RISK";
+    }
+}
 
 
     const description =
