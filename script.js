@@ -2199,54 +2199,153 @@ function renderRisk(data) {
         data.risk || {};
 
     let score =
-        Number(
-            risk.score ||
-            risk.risk_score
+    Number(
+        risk.score ??
+        risk.risk_score
+    );
+
+/*
+   FALLBACK ONLY IF BACKEND
+   SCORE IS NOT AVAILABLE
+*/
+
+if (!Number.isFinite(score)) {
+
+    score =
+        calculateFallbackRisk(
+            data
         );
+}
 
-    /*
-       FALLBACK ONLY IF BACKEND
-       SCORE IS NOT AVAILABLE
-    */
 
-    if (!Number.isFinite(score)) {
+/*
+   STRONG TAMPERING DETECTION
+*/
 
-        score =
-            calculateFallbackRisk(
-                data
-            );
-    }
+const signals =
+    Array.isArray(risk.signals)
+        ? risk.signals
+        : [];
+
+const tamperingCritical =
+    data.tampering?.detected === true ||
+    String(
+        data.tampering?.status || ""
+    ).toUpperCase().includes("CRITICAL") ||
+    signals.some(signal => {
+
+        const s =
+            String(signal).toLowerCase();
+
+        return (
+            s.includes("tampering") ||
+            s.includes("editing-software") ||
+            s.includes("editing software") ||
+            s.includes("recompression") ||
+            s.includes("inconsistent image") ||
+            s.includes("image manipulation") ||
+            s.includes("manipulation detected") ||
+            s.includes("edited image")
+        );
+    });
+
+
+/*
+   AADHAAR CHECKSUM FAILURE
+*/
+
+const checksumFailed =
+    signals.some(signal =>
+        String(signal)
+            .toLowerCase()
+            .includes("fails checksum")
+    );
+
+
+/*
+   MINIMUM RISK RULES
+
+   Strong tampering          → 92+
+   Tampering + checksum fail → 95+
+*/
+
+if (
+    tamperingCritical &&
+    checksumFailed
+) {
 
     score =
         Math.max(
-            0,
-            Math.min(
-                100,
-                Math.round(score)
-            )
+            score,
+            95
         );
 
+}
+else if (
+    tamperingCritical
+) {
 
-    let level =
-        cleanValue(
-            risk.level ||
-            risk.risk_level
+    score =
+        Math.max(
+            score,
+            92
         );
+}
 
 
-    if (!level) {
+/*
+   FINAL SCORE LIMIT
+*/
 
-        if (score <= 25) {
-            level = "LOW RISK";
-        }
-        else if (score <= 60) {
-            level = "MEDIUM RISK";
-        }
-        else {
-            level = "HIGH RISK";
-        }
+score =
+    Math.max(
+        0,
+        Math.min(
+            100,
+            Math.round(score)
+        )
+    );
+
+
+let level =
+    cleanValue(
+        risk.level ||
+        risk.risk_level
+    );
+
+
+/*
+   STRONG TAMPERING = HIGH RISK
+*/
+
+if (
+    tamperingCritical
+) {
+
+    level =
+        "HIGH RISK";
+
+}
+else if (!level) {
+
+    if (score <= 25) {
+
+        level =
+            "LOW RISK";
+
     }
+    else if (score <= 60) {
 
+        level =
+            "MEDIUM RISK";
+
+    }
+    else {
+
+        level =
+            "HIGH RISK";
+    }
+}
 
     const description =
         cleanValue(
