@@ -58,7 +58,7 @@ except Exception:
 
 app = FastAPI(
     title="SecureDoc AI Backend",
-    version="5.1.0",
+    version="6.2.0",
 )
 
 
@@ -66,10 +66,14 @@ app = FastAPI(
 # CORS
 # ============================================================
 
+_cors_origins_raw = os.getenv("SECUREDOC_CORS_ORIGINS", "*")
+_CORS_ORIGINS = [x.strip() for x in _cors_origins_raw.split(",") if x.strip()] or ["*"]
+_CORS_ALLOW_CREDENTIALS = _CORS_ORIGINS != ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_CORS_ORIGINS,
+    allow_credentials=_CORS_ALLOW_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -98,6 +102,8 @@ ALLOWED_CONTENT_TYPES = {
 
 
 MAX_FILE_SIZE = 10 * 1024 * 1024
+
+APP_VERSION = "6.2.0"
 
 MAX_OCR_TEXT_LENGTH = 25000
 
@@ -354,10 +360,10 @@ def get_ocr_language():
         if "eng" in languages:
             return "eng"
 
-        if languages:
-            return next(
-                iter(languages)
-            )
+        # Deterministic fallback instead of selecting an arbitrary set member.
+        for preferred in ("eng", "hin"):
+            if preferred in languages:
+                return preferred
 
     except Exception:
         pass
@@ -1327,7 +1333,7 @@ def count_keywords(
 # PHASE 2 — MULTI-DOCUMENT DETECTION
 # =========================================================
 
-def detect_document_type(text):
+def _LEGACY_DETECT_DOCUMENT_TYPE(text):
 
     upper = normalize_text(
         text
@@ -1900,7 +1906,7 @@ def extract_driving_licence_number(text):
     if not text:
         return None 
 
-    print("DRIVING LICENCE OCR TEXT:", repr(text))
+    print("DRIVING LICENCE OCR: text received for extraction (PII redacted)")
 
     upper_text = text.upper()
 
@@ -2244,7 +2250,7 @@ def normalize_name(value):
     for word in value.split():
 
         word = re.sub(
-            r"[^A-Za-z'-]",
+            r"[^A-Za-z\u0900-\u097F'-]",
             "",
             word,
         )
@@ -3392,7 +3398,7 @@ def build_field_consensus(
 # OCR EXTRACTION PIPELINE — FAST + RELIABLE TESSERACT OCR
 # ================================================================
 
-def extract_ocr_data(image):
+def _LEGACY_EXTRACT_OCR_DATA(image):
     """
     Fast + reliable Tesseract OCR.
 
@@ -3801,7 +3807,7 @@ def extract_ocr_data(image):
 # DISPLAY TEXT
 # ============================================================
 
-def build_display_text(
+def _OLD_build_display_text_1(
     structured,
 ):
 
@@ -3922,7 +3928,7 @@ def build_display_text(
 # TAMPERING DETECTION
 # ============================================================
 
-def analyze_metadata_tampering(
+def _OLD_analyze_metadata_tampering_1(
     metadata
 ):
 
@@ -3980,7 +3986,7 @@ def analyze_metadata_tampering(
     }
 
 
-def perform_error_level_analysis(
+def _OLD_perform_error_level_analysis_1(
     image
 ):
 
@@ -4109,7 +4115,7 @@ def perform_error_level_analysis(
     return result
 
 
-def analyze_image_region_consistency(
+def _OLD_analyze_image_region_consistency_1(
     image
 ):
 
@@ -4382,7 +4388,7 @@ def analyze_image_region_consistency(
 # LOCAL TEXT REGION TAMPERING ANALYSIS
 # ============================================================
 
-def analyze_text_region_for_tampering(image, x, y, w, h):
+def _OLD_analyze_text_region_for_tampering_1(image, x, y, w, h):
     """
     Local forensic screening around an OCR-detected text region.
     This is a supporting signal, NOT proof of forgery.
@@ -4487,7 +4493,7 @@ def analyze_text_region_for_tampering(image, x, y, w, h):
         }
 
 
-def analyze_targeted_text_regions(image, ocr_tokens, structured):
+def _OLD_analyze_targeted_text_regions_1(image, ocr_tokens, structured):
     """
     Run local forensic checks only on OCR regions belonging to
     important extracted fields. This keeps the signal focused on
@@ -4585,7 +4591,7 @@ def analyze_targeted_text_regions(image, ocr_tokens, structured):
     return result
 
 
-def analyze_document_tampering(
+def _OLD_analyze_document_tampering_1(
     image,
     metadata,
 ):
@@ -4870,7 +4876,7 @@ def analyze_extracted_text(
 # IMAGE ANALYSIS
 # ============================================================
 
-def analyze_image(
+def _LEGACY_ANALYZE_IMAGE(
     file_content,
 ):
 
@@ -5160,7 +5166,7 @@ def analyze_image(
 # PDF ANALYSIS
 # ============================================================
 
-def analyze_pdf(
+def _LEGACY_ANALYZE_PDF(
     file_content,
 ):
 
@@ -5499,7 +5505,7 @@ def analyze_pdf(
 # RISK ASSESSMENT
 # ============================================================
 
-def calculate_risk(
+def _OLD_calculate_risk_1(
     file_format_valid,
     structure_valid,
     file_size,
@@ -5641,7 +5647,7 @@ def calculate_risk(
 # VALIDATION RESULTS
 # ============================================================
 
-def build_validation_results(
+def _OLD_build_validation_results_1(
     file_format_valid,
     structure_valid,
     analysis,
@@ -5770,10 +5776,7 @@ def build_validation_results(
 import math
 
 
-# Keep the original working implementations available as fallbacks.
-_LEGACY_DETECT_DOCUMENT_TYPE = detect_document_type
-_LEGACY_ANALYZE_IMAGE = analyze_image
-_LEGACY_ANALYZE_PDF = analyze_pdf
+# Explicit legacy implementations are preserved under _LEGACY_* names.
 
 
 # ============================================================
@@ -5799,7 +5802,7 @@ def _count_patterns(text, patterns):
     return total
 
 
-def detect_document_type(text):
+def _OLD_detect_document_type_2(text):
     """Universal weighted document classifier using keywords, labels and patterns."""
     text = normalize_text(text)
     upper = _norm_upper(text)
@@ -6691,7 +6694,7 @@ def detect_visual_overlay_signal(image):
 # TAMPERING FUSION ENGINE
 # ============================================================
 
-def analyze_document_tampering(image, metadata, ocr_tokens=None, structured=None):
+def _OLD_analyze_document_tampering_2(image, metadata, ocr_tokens=None, structured=None):
     metadata = metadata or {}
     structured = structured or {}
     signals = []
@@ -6783,10 +6786,10 @@ def analyze_document_tampering(image, metadata, ocr_tokens=None, structured=None
 # readable document was classified correctly but its bottom identifier was
 # skipped by PSM 6.
 
-_LEGACY_EXTRACT_OCR_DATA = extract_ocr_data
+# _LEGACY_EXTRACT_OCR_DATA is the original fast Tesseract implementation.
 
 
-def _targeted_identifier_ocr(image):
+def _OLD__targeted_identifier_ocr_1(image):
     results = []
     try:
         rgb = fix_orientation(image).convert("RGB")
@@ -6847,7 +6850,7 @@ def _merge_identifier_fields(structured, text, category):
     return structured
 
 
-def extract_ocr_data(image):
+def _OLD_extract_ocr_data_2(image):
     result = _LEGACY_EXTRACT_OCR_DATA(image)
     if not result:
         result = {"raw_ocr_text": "", "structured_data": {}, "ocr_tokens": [], "ocr_confidence": 0}
@@ -7063,7 +7066,7 @@ def analyze_pdf(file_content):
 # FINAL RISK FUSION
 # ============================================================
 
-def calculate_risk(file_format_valid, structure_valid, file_size, analysis):
+def _OLD_calculate_risk_2(file_format_valid, structure_valid, file_size, analysis):
     components = []
     signals = []
     evidence = []
@@ -7178,7 +7181,7 @@ def calculate_risk(file_format_valid, structure_valid, file_size, analysis):
 # FINAL VALIDATION UI DATA
 # ============================================================
 
-def build_validation_results(file_format_valid, structure_valid, analysis):
+def _OLD_build_validation_results_2(file_format_valid, structure_valid, analysis):
     structured = analysis.get("structured_data") or {}
     validation = analysis.get("document_validation") or {}
     cross = analysis.get("cross_field_consistency") or {}
@@ -7242,7 +7245,7 @@ def home():
     return {
         "message": "SecureDoc AI Backend is Running!",
         "status": "online",
-        "version": "6.1.0",
+        "version": APP_VERSION,
         "phase": "Universal Document Screening + OCR + Multi-Layer Forensics",
         "opencv_available": CV2_AVAILABLE,
         "paddleocr_available": PADDLE_AVAILABLE,
@@ -7264,7 +7267,7 @@ def health():
         "opencv_available": CV2_AVAILABLE,
         "paddleocr_available": PADDLE_AVAILABLE,
         "paddleocr_error": _PADDLE_ENGINE_ERROR,
-        "backend_version": "6.1.0",
+        "backend_version": APP_VERSION,
     }
 
 
@@ -7333,6 +7336,7 @@ async def upload_document(file: UploadFile = File(...)):
     ocr_conf = float(analysis_data.get("ocr_confidence", 0) or 0)
     tamper_probability = float(tampering.get("score", 0) or 0)
     anomaly_confidence = round(min(99, max(50, 55 + ocr_conf * 0.25 + min(25, tamper_probability * 0.25))), 1)
+    # Heuristic technical-screening confidence; NOT probability of forgery.
 
     document_validation = analysis_data.get("document_validation") or {}
     cross = analysis_data.get("cross_field_consistency") or {}
@@ -7692,7 +7696,7 @@ def _merge_final_ocr_results(base_result, extra_results):
     return base_result
 
 
-def extract_ocr_data(image):
+def _OLD_extract_ocr_data_3(image):
     """Legacy-first OCR with controlled multi-pass recovery.
 
     The old fast Tesseract path remains the primary path. Additional passes
@@ -8393,10 +8397,25 @@ def extract_ocr_data(image):
                     token for item in targeted for token in (item.get("tokens") or [])
                 ],
             })
-            result["ocr_confidence"] = max(
-                float(result.get("ocr_confidence", 0) or 0),
-                max((float(x.get("confidence", 0) or 0) for x in targeted), default=0.0),
+            primary_confidence = float(result.get("ocr_confidence", 0) or 0)
+            recovery_confidence = max(
+                (float(x.get("confidence", 0) or 0) for x in targeted),
+                default=0.0,
             )
+            # Recovery OCR usually covers only a crop, so its confidence is
+            # weighted rather than presented as full-document confidence.
+            result["primary_ocr_confidence"] = round(primary_confidence, 2)
+            result["recovery_ocr_confidence"] = round(recovery_confidence, 2)
+            if primary_confidence > 0 and recovery_confidence > 0:
+                result["ocr_confidence"] = round(
+                    primary_confidence * 0.70 + recovery_confidence * 0.30,
+                    2,
+                )
+            else:
+                result["ocr_confidence"] = round(
+                    max(primary_confidence, recovery_confidence),
+                    2,
+                )
 
     return result
 
