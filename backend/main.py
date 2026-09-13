@@ -7430,6 +7430,976 @@ async def upload_document(file: UploadFile = File(...)):
     }
 
 
+
+# ============================================================
+# FINAL CONSOLIDATED SCREENING OVERRIDES
+# ============================================================
+# These overrides intentionally preserve the old working OCR/PDF/image
+# pipeline and replace only the problematic final decision layers:
+# document classification, OCR recovery fallback, forensic weighting,
+# and risk fusion.
+#
+# Design principles:
+#   - Technical artifacts are not automatically treated as forgery.
+#   - Unknown document type means REVIEW, not VALID and not FAKE.
+#   - QR absence is NOT a risk signal.
+#   - Face count is informational, not a forgery signal.
+#   - A single weak forensic signal cannot create high risk.
+#   - Document-specific checks are applied only to the detected type.
+#   - AI-edit wording is explicitly probabilistic/forensic-screening only.
+
+def detect_document_type(text):
+    """Universal evidence-weighted document classifier.
+
+    Uses document terminology, field labels and identifier patterns together.
+    Generic terms such as 'Government of India' are deliberately weak so they
+    cannot by themselves turn an arbitrary image into an Aadhaar document.
+    """
+    text = normalize_text(text)
+    upper = _norm_upper(text)
+    compact = re.sub(r"[^A-Z0-9]", "", upper)
+
+    scores = defaultdict(float)
+    evidence = defaultdict(list)
+
+    def add(category, points, reason):
+        scores[category] += float(points)
+        evidence[category].append(reason)
+
+    def has(*terms):
+        return any(term.upper() in upper for term in terms)
+
+    # ------------------------- AADHAAR -------------------------
+    if has("AADHAAR", "AADHAR", "UIDAI", "UNIQUE IDENTIFICATION AUTHORITY"):
+        add("AADHAAR_CARD", 9, "Aadhaar/UIDAI terminology")
+    if has("MY AADHAAR", "मेरा आधार", "आधार पहचान"):
+        add("AADHAAR_CARD", 4, "Aadhaar-specific wording")
+    if has("AADHAAR IS PROOF OF IDENTITY"):
+        add("AADHAAR_CARD", 5, "Aadhaar identity notice")
+    if re.search(r"(?<!\d)\d{4}[ -]?\d{4}[ -]?\d{4}(?!\d)", upper):
+        add("AADHAAR_CARD", 3.5, "12-digit grouped identifier pattern")
+    if has("GOVERNMENT OF INDIA") and (
+        has("UIDAI", "AADHAAR", "AADHAR")
+        or re.search(r"(?<!\d)\d{4}[ -]?\d{4}[ -]?\d{4}(?!\d)", upper)
+    ):
+        add("AADHAAR_CARD", 1.5, "Government of India + Aadhaar evidence")
+
+    # --------------------------- PAN ---------------------------
+    if has("PERMANENT ACCOUNT NUMBER", "INCOME TAX DEPARTMENT"):
+        add("PAN_CARD", 9, "PAN/Income Tax terminology")
+    elif has("INCOME TAX"):
+        add("PAN_CARD", 5, "Income Tax terminology")
+    if re.search(r"\b[A-Z]{5}[0-9]{4}[A-Z]\b", upper):
+        add("PAN_CARD", 5, "PAN identifier pattern")
+
+    # -------------------- DRIVING LICENCE ---------------------
+    if has("DRIVING LICENCE", "DRIVING LICENSE"):
+        add("DRIVING_LICENCE", 9, "Driving licence terminology")
+    if has("TRANSPORT DEPARTMENT", "LICENCE NO", "LICENSE NO"):
+        add("DRIVING_LICENCE", 4, "Transport/licence field labels")
+    if re.search(r"\b[A-Z]{2}\d{2}[ -]?\d{4,6}[ -]?\d{5,10}\b", upper):
+        add("DRIVING_LICENCE", 4, "Driving licence number pattern")
+
+    # ------------------------- PASSPORT -----------------------
+    if has("PASSPORT"):
+        add("PASSPORT", 10, "Passport terminology")
+    if has("REPUBLIC OF INDIA", "NATIONALITY") and has("DATE OF EXPIRY", "DATE OF ISSUE"):
+        add("PASSPORT", 3, "Passport-style identity/date fields")
+    if re.search(r"\b[A-Z][0-9]{7}\b", upper) and has("PASSPORT", "NATIONALITY"):
+        add("PASSPORT", 3, "Passport number pattern with passport evidence")
+
+    # --------------------------- VISA --------------------------
+    if has("VISA NUMBER", "VISA NO", "TYPE OF VISA", "VALID FROM", "VALID UNTIL", "VALID TO"):
+        add("VISA", 7, "Visa-specific field labels")
+    elif has("VISA"):
+        add("VISA", 5, "Visa terminology")
+
+    # -------------------------- PERMIT ------------------------
+    if has("RESIDENCE PERMIT", "WORK PERMIT", "ENTRY PERMIT", "TEMPORARY PERMIT"):
+        add("PERMIT", 8, "Permit-specific terminology")
+    elif has("PERMIT"):
+        add("PERMIT", 4, "Permit terminology")
+
+    # ------------------------ VOTER ID ------------------------
+    if has("ELECTION COMMISSION", "ELECTORAL", "ELECTOR PHOTO ID", "EPIC"):
+        add("VOTER_ID", 8, "Election/elector terminology")
+    if re.search(r"\b[A-Z]{3}[0-9]{7}\b", upper) and has("ELECTOR", "EPIC", "ELECTION"):
+        add("VOTER_ID", 4, "Voter identifier pattern")
+
+    # ----------------------- RATION CARD ----------------------
+    if has("RATION CARD", "PUBLIC DISTRIBUTION SYSTEM", "FOOD AND CIVIL SUPPLIES"):
+        add("RATION_CARD", 8, "Ration/PDS terminology")
+
+    # ------------------------ GST DOCUMENT --------------------
+    if has("GSTIN", "GOODS AND SERVICES TAX", "GST REGISTRATION"):
+        add("GST_DOCUMENT", 8, "GST terminology")
+    if re.search(r"\b[0-9]{2}[A-Z0-9]{5}[0-9]{4}[A-Z][A-Z0-9]Z[A-Z0-9]\b", upper):
+        add("GST_DOCUMENT", 5, "GSTIN pattern")
+
+    # -------------------------- INVOICE -----------------------
+    if has("INVOICE", "BILL TO", "INVOICE NO", "AMOUNT DUE"):
+        add("INVOICE", 7, "Invoice terminology")
+    if has("TOTAL AMOUNT", "SUBTOTAL", "TAX", "QUANTITY"):
+        add("INVOICE", 2, "Invoice-style financial fields")
+
+    # ------------------------- MARKSHEET ----------------------
+    if has("MARKSHEET", "MARK SHEET", "STATEMENT OF MARKS", "TOTAL MARKS"):
+        add("MARKSHEET", 8, "Marksheet terminology")
+    if has("PERCENTAGE", "GRADE", "SEMESTER", "SUBJECT"):
+        add("MARKSHEET", 2, "Academic result fields")
+
+    # ------------------------ CERTIFICATE ---------------------
+    if has("CERTIFICATE", "THIS IS TO CERTIFY", "CERTIFIED THAT"):
+        add("CERTIFICATE", 7, "Certificate terminology")
+    if has("CERTIFICATE NO", "DATE OF ISSUE"):
+        add("CERTIFICATE", 2, "Certificate fields")
+
+    # ---------------------- BANK DOCUMENT ---------------------
+    if has("BANK STATEMENT", "ACCOUNT HOLDER", "IFSC", "ACCOUNT NUMBER"):
+        add("BANK_DOCUMENT", 7, "Banking terminology")
+    if has("TRANSACTION", "BALANCE", "BRANCH"):
+        add("BANK_DOCUMENT", 2, "Bank statement fields")
+
+    # ---------------------- GENERIC ID CARD -------------------
+    if has("IDENTITY CARD", "IDENTIFICATION CARD", "NATIONAL IDENTITY", "NATIONAL ID"):
+        add("IDENTITY_CARD", 6, "Identity-card terminology")
+    if has("SURNAME", "GIVEN NAMES", "DATE OF BIRTH", "GENDER"):
+        add("IDENTITY_CARD", 1.5, "Identity fields")
+
+    if not scores:
+        return {
+            "document_category": "UNKNOWN",
+            "document_label": "Unknown Document",
+            "confidence": "LOW",
+            "score": 0,
+            "all_scores": {},
+            "evidence": [],
+            "ambiguous": False,
+        }
+
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    best_category, best_score = ranked[0]
+    second_score = ranked[1][1] if len(ranked) > 1 else 0.0
+
+    # Require meaningful evidence. A weak single clue is not enough.
+    if best_score < 5:
+        best_category = "UNKNOWN"
+        best_score = 0.0
+
+    margin = best_score - second_score
+    ambiguous = bool(
+        best_category != "UNKNOWN"
+        and second_score >= 5
+        and margin < max(2.5, best_score * 0.18)
+    )
+
+    if best_category == "UNKNOWN":
+        confidence = "LOW"
+    elif ambiguous:
+        confidence = "MEDIUM"
+    elif best_score >= 10 and margin >= 3:
+        confidence = "HIGH"
+    elif best_score >= 7:
+        confidence = "MEDIUM"
+    else:
+        confidence = "LOW"
+
+    return {
+        "document_category": best_category,
+        "document_label": DOCUMENT_LABELS.get(best_category, "Unknown Document"),
+        "confidence": confidence,
+        "score": round(best_score, 2),
+        "all_scores": {k: round(v, 2) for k, v in scores.items()},
+        "evidence": evidence.get(best_category, [])[:12],
+        "ambiguous": ambiguous,
+        "runner_up": (
+            DOCUMENT_LABELS.get(ranked[1][0], ranked[1][0])
+            if len(ranked) > 1 else None
+        ),
+    }
+
+
+def _merge_final_ocr_results(base_result, extra_results):
+    """Merge OCR candidates without destroying the legacy result shape."""
+    base_result = dict(base_result or {})
+    base_text = normalize_text(base_result.get("raw_ocr_text", ""))
+    candidates = []
+
+    if base_text:
+        candidates.append({
+            "text": base_text,
+            "confidence": float(base_result.get("ocr_confidence", 0) or 0),
+            "tokens": list(base_result.get("ocr_tokens") or []),
+            "variant": base_result.get("ocr_variant"),
+            "engine": base_result.get("ocr_engine", "tesseract"),
+        })
+
+    candidates.extend(extra_results or [])
+
+    if not candidates:
+        return base_result
+
+    def candidate_score(item):
+        text = normalize_text(item.get("text", ""))
+        conf = float(item.get("confidence", 0) or 0)
+        det = detect_document_type(text)
+        structured = {}
+        try:
+            structured = extract_fields_from_text(text, det) or {}
+        except Exception:
+            pass
+        useful_fields = sum(
+            1 for k in (
+                "aadhaar_number", "pan_number", "passport_number",
+                "driving_licence_number", "voter_id_number", "gstin",
+                "name", "date_of_birth"
+            ) if structured.get(k)
+        )
+        return min(120.0, conf * 0.7 + min(len(text), 500) * 0.03 + useful_fields * 8 + (8 if det["document_category"] != "UNKNOWN" else 0))
+
+    best = max(candidates, key=candidate_score)
+    final_text = normalize_text(best.get("text", ""))[:MAX_OCR_TEXT_LENGTH]
+    detection = detect_document_type(final_text)
+
+    try:
+        structured = extract_fields_from_text(final_text, detection) or {}
+    except Exception:
+        structured = {}
+
+    # Preserve fields already obtained by the legacy extractor if the new
+    # candidate loses something due to OCR variation.
+    old_structured = base_result.get("structured_data") or {}
+    for key, value in old_structured.items():
+        if value and not structured.get(key):
+            structured[key] = value
+
+    base_result.update({
+        "raw_ocr_text": final_text,
+        "extracted_text": final_text,
+        "ocr_status": "TEXT_DETECTED" if final_text else "NO_TEXT_DETECTED",
+        "ocr_confidence": round(float(best.get("confidence", 0) or 0), 2),
+        "ocr_variant": best.get("variant"),
+        "ocr_engine": best.get("engine", "tesseract"),
+        "structured_data": structured,
+        "extracted_data": structured,
+        "extracted": structured,
+        "document_detection": detection,
+        "document_category": detection.get("document_category", "UNKNOWN"),
+        "document_label": detection.get("document_label", "Unknown Document"),
+        "document_detection_confidence": detection.get("confidence", "LOW"),
+        "ocr_tokens": best.get("tokens") or base_result.get("ocr_tokens") or [],
+    })
+    return base_result
+
+
+def extract_ocr_data(image):
+    """Legacy-first OCR with controlled multi-pass recovery.
+
+    The old fast Tesseract path remains the primary path. Additional passes
+    happen only when text is missing, weak, or the document type/identifier is
+    unresolved.
+    """
+    try:
+        result = _LEGACY_EXTRACT_OCR_DATA(image) or {}
+    except Exception as error:
+        print("LEGACY OCR ERROR:", str(error))
+        result = {}
+
+    text = normalize_text(result.get("raw_ocr_text", ""))
+    category = result.get("document_category") or result.get("document_detection", {}).get("document_category", "UNKNOWN")
+    confidence = float(result.get("ocr_confidence", 0) or 0)
+
+    needs_recovery = (
+        not text
+        or confidence < 45
+        or category == "UNKNOWN"
+        or len(text) < 30
+    )
+
+    if not needs_recovery:
+        # Reclassify with the final universal detector so the runtime always
+        # uses the same classifier as the final screening layer.
+        detection = detect_document_type(text)
+        result["document_detection"] = detection
+        result["document_category"] = detection.get("document_category", "UNKNOWN")
+        result["document_label"] = detection.get("document_label", "Unknown Document")
+        result["document_detection_confidence"] = detection.get("confidence", "LOW")
+        return result
+
+    extras = []
+    language = get_ocr_language()
+
+    try:
+        rgb = fix_orientation(image).convert("RGB")
+        normal = resize_for_ocr(rgb)
+
+        passes = [
+            ("recovery_psm11", normal, "--oem 3 --psm 11"),
+            ("recovery_psm12", normal, "--oem 3 --psm 12"),
+        ]
+
+        # Only use enhanced/binary variants when the normal image did not
+        # provide enough evidence. This avoids degrading already-good scans.
+        variants = create_ocr_variants(rgb)
+        for name, variant in variants:
+            if name == "original":
+                continue
+            passes.append((f"recovery_{name}_psm6", variant, "--oem 3 --psm 6"))
+
+        seen = set()
+        for name, candidate_image, config in passes:
+            try:
+                candidate = run_ocr_pass(candidate_image, config, language)
+                candidate_text = normalize_text(candidate.get("text", ""))
+                key = re.sub(r"\s+", " ", candidate_text).lower()
+                if candidate_text and key not in seen:
+                    seen.add(key)
+                    extras.append({
+                        "text": candidate_text,
+                        "confidence": float(candidate.get("confidence", 0) or 0),
+                        "tokens": candidate.get("tokens") or [],
+                        "variant": name,
+                        "engine": "tesseract",
+                    })
+            except Exception as error:
+                print("OCR RECOVERY PASS ERROR:", name, str(error))
+
+        safe_close(rgb)
+        safe_close(normal)
+        for _, variant in variants:
+            safe_close(variant)
+    except Exception as error:
+        print("OCR RECOVERY ERROR:", str(error))
+
+    merged = _merge_final_ocr_results(result, extras)
+
+    # Identifier-focused recovery from the existing targeted OCR layer.
+    merged_text = normalize_text(merged.get("raw_ocr_text", ""))
+    merged_category = merged.get("document_category", "UNKNOWN")
+    identifier_missing = (
+        (merged_category == "AADHAAR_CARD" and not merged.get("structured_data", {}).get("aadhaar_number"))
+        or (merged_category == "PAN_CARD" and not merged.get("structured_data", {}).get("pan_number"))
+        or (merged_category == "PASSPORT" and not merged.get("structured_data", {}).get("passport_number"))
+        or (merged_category == "VOTER_ID" and not merged.get("structured_data", {}).get("voter_id_number"))
+        or (merged_category == "GST_DOCUMENT" and not merged.get("structured_data", {}).get("gstin"))
+    )
+
+    if identifier_missing or not merged_text:
+        try:
+            targeted = _targeted_identifier_ocr(image)
+            if targeted:
+                targeted_text = normalize_text(
+                    merged_text + "\n" + "\n".join(x.get("text", "") for x in targeted)
+                )[:MAX_OCR_TEXT_LENGTH]
+                detection = detect_document_type(targeted_text)
+                structured = extract_fields_from_text(targeted_text, detection) or {}
+                old = merged.get("structured_data") or {}
+                for key, value in old.items():
+                    if value and not structured.get(key):
+                        structured[key] = value
+                structured = _merge_identifier_fields(
+                    structured, targeted_text, detection.get("document_category", "UNKNOWN")
+                )
+                merged.update({
+                    "raw_ocr_text": targeted_text,
+                    "extracted_text": targeted_text,
+                    "ocr_status": "TEXT_DETECTED" if targeted_text else "NO_TEXT_DETECTED",
+                    "document_detection": detection,
+                    "document_category": detection.get("document_category", "UNKNOWN"),
+                    "document_label": detection.get("document_label", "Unknown Document"),
+                    "document_detection_confidence": detection.get("confidence", "LOW"),
+                    "structured_data": structured,
+                    "extracted_data": structured,
+                    "extracted": structured,
+                    "ocr_recovery_passes": [
+                        x.get("name") for x in targeted
+                    ],
+                    "ocr_recovery_text": "\n".join(
+                        x.get("text", "") for x in targeted
+                    ),
+                    "ocr_tokens": list(merged.get("ocr_tokens") or []) + [
+                        token
+                        for x in targeted
+                        for token in (x.get("tokens") or [])
+                    ],
+                })
+        except Exception as error:
+            print("TARGETED IDENTIFIER MERGE ERROR:", str(error))
+
+    return merged
+
+
+def analyze_document_tampering(image, metadata, ocr_tokens=None, structured=None):
+    """Conservative multi-signal forensic screening.
+
+    ELA, local noise and edge variation are inherently noisy on screenshots,
+    scans, JPEGs and photographed documents. They are therefore weak evidence
+    unless corroborated by independent signals.
+    """
+    metadata = metadata or {}
+    structured = structured or {}
+    ocr_tokens = ocr_tokens or []
+
+    signals = []
+    evidence = []
+    components = []
+
+    def add(name, points, message, strength="weak", details=None):
+        points = max(0.0, float(points))
+        if points <= 0:
+            return
+        components.append({
+            "signal": name,
+            "points": round(points, 2),
+            "strength": strength,
+        })
+        signals.append(message)
+        if details is not None:
+            evidence.append({
+                "type": name,
+                "strength": strength,
+                "details": details,
+            })
+
+    metadata_result = analyze_metadata_tampering(metadata)
+    if metadata_result.get("editing_software_signals"):
+        add(
+            "metadata_editing_software",
+            12,
+            "Image metadata references editing software; this is a supporting clue, not proof of alteration.",
+            "moderate",
+            metadata_result.get("evidence", []),
+        )
+
+    overlay = detect_visual_overlay_signal(image)
+    if overlay.get("detected"):
+        # A diagonal SAMPLE/NOT VALID style overlay is usually a document
+        # marking, not evidence that the underlying document was AI-edited.
+        add(
+            "visual_overlay",
+            min(8, float(overlay.get("score", 0) or 0) * 0.20),
+            "A visual overlay/stamp was detected; review the document marking separately.",
+            "weak",
+            overlay,
+        )
+
+    ela = perform_error_level_analysis(image)
+    ela_score = float(ela.get("score", 0) or 0)
+    if ela.get("status") == "REVIEW" and ela_score >= 45:
+        add(
+            "ela",
+            min(10, max(2, (ela_score - 40) * 0.16)),
+            "JPEG recompression residuals are unusual enough to warrant supporting review.",
+            "weak",
+            ela,
+        )
+
+    region = analyze_image_region_consistency(image)
+    region_count = len(region.get("suspicious_regions", []) or [])
+    region_score = float(region.get("noise_score", 0) or 0)
+    edge_score = float(region.get("edge_score", 0) or 0)
+
+    if region_count >= 2 and (region_score >= 45 or edge_score >= 45):
+        add(
+            "regional_consistency",
+            min(12, 4 + region_count * 1.5),
+            f"{region_count} local image region(s) show elevated forensic variation.",
+            "moderate",
+            {
+                "noise_score": region_score,
+                "edge_score": edge_score,
+                "suspicious_regions": region.get("suspicious_regions", [])[:20],
+            },
+        )
+
+    text_region = analyze_targeted_text_regions(image, ocr_tokens, structured)
+    text_count = len(text_region.get("suspicious_regions", []) or [])
+    if text_count >= 2:
+        add(
+            "text_region_consistency",
+            min(12, 4 + text_count * 1.5),
+            f"{text_count} OCR text region(s) show local forensic irregularity.",
+            "moderate",
+            text_region.get("suspicious_regions", [])[:20],
+        )
+
+    raw_text = normalize_text(
+        "\n".join(str(t.get("text", "")) for t in ocr_tokens)
+    )
+    demo_hits = detect_demo_or_mockup_signals(raw_text)
+
+    # Explicit markings are handled as a separate document-status signal.
+    # They are intentionally NOT added to AI-edit/tampering score.
+    marking_status = "NONE"
+    if demo_hits:
+        marking_status = "OFFICIAL_USE_REVIEW"
+        signals.extend(
+            [f"Document marking detected: {hit}" for hit in demo_hits]
+        )
+        evidence.append({
+            "type": "document_marking",
+            "strength": "strong_for_document_status",
+            "signals": demo_hits,
+        })
+
+    # Independent corroboration: at least two different forensic families
+    # are needed before the score can move into a meaningful tampering range.
+    strongish = [
+        c for c in components
+        if c["strength"] in {"moderate", "strong"}
+    ]
+
+    raw_score = sum(c["points"] for c in components)
+    if len(strongish) >= 2:
+        raw_score += 6
+    elif len(strongish) == 0:
+        # Weak-only evidence is deliberately capped.
+        raw_score = min(raw_score, 12)
+
+    score = round(min(100.0, max(0.0, raw_score)), 1)
+
+    if len(strongish) >= 2 and score >= 30:
+        level = "MEDIUM"
+        status = "REVIEW_RECOMMENDED"
+    elif len(strongish) >= 2 and score >= 50:
+        level = "HIGH"
+        status = "HIGH_REVIEW_REQUIRED"
+    elif score >= 18 and len(strongish) >= 1:
+        level = "LOW-MEDIUM"
+        status = "REVIEW_RECOMMENDED"
+    else:
+        level = "LOW"
+        status = "NO_STRONG_SIGNAL"
+
+    # Correct ordering for high threshold after combined evidence.
+    if len(strongish) >= 2 and score >= 50:
+        level = "HIGH"
+        status = "HIGH_REVIEW_REQUIRED"
+    elif len(strongish) >= 2 and score >= 30:
+        level = "MEDIUM"
+        status = "REVIEW_RECOMMENDED"
+
+    if score < 18:
+        ai_status = "NO_STRONG_EDITING_SIGNAL"
+    elif len(strongish) >= 2:
+        ai_status = "COMBINED_FORENSIC_SIGNAL_REVIEW"
+    else:
+        ai_status = "WEAK_FORENSIC_SIGNAL"
+
+    return {
+        "score": score,
+        "tampering_probability": score,
+        "level": level,
+        "risk_level": level,
+        "status": status,
+        "detected": bool(len(strongish) >= 2 and score >= 30),
+        "signals": signals[:40],
+        "evidence": evidence[:40],
+        "score_components": components,
+        "independent_signal_count": len(strongish),
+        "metadata": metadata_result,
+        "visual_overlay": overlay,
+        "ela": ela,
+        "region_consistency": region,
+        "text_region_analysis": text_region,
+        "demo_mockup_signals": demo_hits,
+        "document_marking_status": marking_status,
+        "ai_edit_assessment": {
+            "status": ai_status,
+            "note": "This is heuristic forensic screening. It cannot prove that a document was AI-generated or AI-edited.",
+        },
+        "disclaimer": "Forensic screening signals are supporting evidence, not legal proof of forgery or AI editing.",
+    }
+
+
+def calculate_risk(file_format_valid, structure_valid, file_size, analysis):
+    """Evidence-weighted screening score.
+
+    Strong failures can raise risk quickly. Weak forensic artifacts are capped
+    so normal scans/screenshots do not become 80-90 risk by themselves.
+    """
+    analysis = analysis or {}
+    components = []
+    signals = []
+    evidence = []
+
+    def add(name, points, reason=None):
+        points = max(0.0, float(points))
+        if points > 0:
+            components.append({"name": name, "points": round(points, 2)})
+        if reason:
+            signals.append(reason)
+
+    if not file_format_valid:
+        add("file_integrity", 45, "File signature does not match the declared content type.")
+    if not structure_valid:
+        add("document_structure", 40, "Document could not be parsed successfully.")
+
+    ocr_status = str(analysis.get("ocr_status", "NO_TEXT_DETECTED"))
+    ocr_conf = float(analysis.get("ocr_confidence", 0) or 0)
+    if ocr_status in {"NO_TEXT_DETECTED", "OCR_ERROR"}:
+        add("ocr", 22, "No reliable OCR text was obtained.")
+    elif ocr_conf < 35:
+        add("ocr", 18, "OCR readability is low.")
+    elif ocr_conf < 55:
+        add("ocr", 8, "OCR readability is moderate.")
+
+    category = analysis.get("document_category", "UNKNOWN")
+    detection_conf = str(
+        analysis.get("document_detection_confidence", "LOW")
+    ).upper()
+
+    if category == "UNKNOWN":
+        add(
+            "document_detection",
+            18,
+            "Document type could not be identified confidently; manual review is required.",
+        )
+    elif detection_conf == "LOW":
+        add("document_detection", 5, "Document type confidence is low.")
+    elif detection_conf == "MEDIUM":
+        add("document_detection_review", 2, "Document type was identified with medium confidence.")
+
+    quality = analysis.get("image_quality") or {}
+    quality_issues = quality.get("issues") or []
+    if quality_issues:
+        add(
+            "image_quality",
+            min(10, len(quality_issues) * 2),
+            "Image quality may reduce screening reliability.",
+        )
+
+    validation = analysis.get("document_validation") or {}
+    failed = int(validation.get("failed_count", 0) or 0)
+    reviews = int(validation.get("review_count", 0) or 0)
+
+    if failed:
+        # Failed document-specific checks are meaningful only for checks that
+        # actually apply to the detected document type.
+        add(
+            "document_validation",
+            min(45, failed * 18),
+            f"{failed} applicable document validation check(s) failed.",
+        )
+        evidence.extend(validation.get("checks", [])[:20])
+    elif reviews:
+        add(
+            "document_validation_review",
+            min(10, reviews * 3),
+            f"{reviews} applicable document validation check(s) require review.",
+        )
+
+    cross = analysis.get("cross_field_consistency") or {}
+    if cross.get("status") == "FAILED":
+        add(
+            "cross_consistency",
+            22,
+            "Cross-field consistency checks found contradictions.",
+        )
+        evidence.extend(cross.get("issues", [])[:20])
+    elif cross.get("status") == "REVIEW":
+        add(
+            "cross_consistency_review",
+            4,
+            "Cross-field consistency evidence is incomplete.",
+        )
+
+    qr = analysis.get("qr_analysis") or {}
+    qr_status = str(qr.get("status", "NOT_AVAILABLE")).upper()
+    if qr_status == "DATA_MISMATCH":
+        add(
+            "qr_mismatch",
+            35,
+            "Decoded QR data conflicts with extracted document data.",
+        )
+        evidence.append(qr)
+    # NOT_PRESENT / NOT_DECODED / NOT_AVAILABLE are deliberately zero-risk.
+
+    tampering = analysis.get("tampering_analysis") or {}
+    tamper_score = float(
+        tampering.get("score", tampering.get("tampering_probability", 0)) or 0
+    )
+    independent = int(tampering.get("independent_signal_count", 0) or 0)
+
+    if independent >= 2 and tamper_score >= 50:
+        add(
+            "forensics",
+            min(35, tamper_score * 0.55),
+            "Multiple independent forensic signal families require review.",
+        )
+        evidence.extend(tampering.get("evidence", [])[:20])
+    elif independent >= 2 and tamper_score >= 30:
+        add(
+            "forensics",
+            min(20, tamper_score * 0.35),
+            "Combined forensic signals warrant review.",
+        )
+        evidence.extend(tampering.get("evidence", [])[:15])
+    elif tamper_score >= 18:
+        # Weak/single forensic evidence has intentionally limited influence.
+        add(
+            "forensics_weak",
+            min(8, tamper_score * 0.20),
+            "A weak forensic signal was detected; this alone is not evidence of forgery.",
+        )
+
+    markings = analysis.get("document_marking_signals") or []
+    if markings:
+        # A SAMPLE/NOT VALID marking means the uploaded artifact may be a
+        # demonstration/mock-up. It is not treated as an AI-editing signal.
+        add(
+            "document_marking",
+            min(18, 8 + len(markings) * 3),
+            "Document contains sample/demo/not-for-official-use marking.",
+        )
+        evidence.extend(markings[:10])
+
+    # Face count is informational only.
+    raw_score = sum(item["points"] for item in components)
+    score = int(round(min(100.0, max(0.0, raw_score))))
+
+    if score <= 20:
+        level = "LOW RISK"
+        screening_status = "LOW RISK"
+    elif score <= 50:
+        level = "MEDIUM RISK"
+        screening_status = "REVIEW"
+    elif score <= 75:
+        level = "HIGH RISK"
+        screening_status = "SUSPICIOUS"
+    else:
+        level = "CRITICAL REVIEW"
+        screening_status = "HIGH RISK"
+
+    # Unknown documents must never be presented as a confident VALID result.
+    if category == "UNKNOWN":
+        if score < 21:
+            score = 21
+        level = "MEDIUM RISK"
+        screening_status = "REVIEW"
+
+    # Explicit hard contradictions deserve review even if the weighted total
+    # happens to remain low.
+    if (
+        validation.get("overall_status") == "FAILED"
+        or cross.get("status") == "FAILED"
+        or qr_status == "DATA_MISMATCH"
+    ) and score < 51:
+        score = 51
+        level = "HIGH RISK"
+        screening_status = "SUSPICIOUS"
+
+    return score, level, signals, {
+        "components": components,
+        "evidence": evidence[:60],
+        "screening_status": screening_status,
+        "raw_score": round(raw_score, 2),
+        "scoring_policy": "Evidence-weighted; weak forensic artifacts are capped and QR absence/face count are non-risk signals.",
+    }
+
+
+def build_validation_results(file_format_valid, structure_valid, analysis):
+    """Build accurate UI validation labels without implying unsupported checks."""
+    validation = analysis.get("document_validation") or {}
+    cross = analysis.get("cross_field_consistency") or {}
+    tampering = analysis.get("tampering_analysis") or {}
+    qr = analysis.get("qr_analysis") or {}
+    quality = analysis.get("image_quality") or {}
+
+    ocr_conf = float(analysis.get("ocr_confidence", 0) or 0)
+    category = analysis.get("document_category", "UNKNOWN")
+    detection_conf = str(
+        analysis.get("document_detection_confidence", "LOW")
+    ).upper()
+
+    if category == "UNKNOWN":
+        document_status = "REVIEW REQUIRED"
+    else:
+        document_status = analysis.get("document_label", "Unknown Document")
+
+    qr_status = str(qr.get("status", "NOT_AVAILABLE")).upper()
+    if qr_status == "NOT_PRESENT":
+        qr_ui = "NOT PRESENT"
+    elif qr_status == "NOT_DECODED":
+        qr_ui = "DETECTED — NOT DECODED"
+    elif qr_status == "DATA_MISMATCH":
+        qr_ui = "MISMATCH"
+    elif qr_status == "DECODED":
+        qr_ui = "DECODED"
+    else:
+        qr_ui = "NOT AVAILABLE"
+
+    if tampering.get("status") == "HIGH_REVIEW_REQUIRED":
+        forensic_ui = "HIGH REVIEW"
+    elif tampering.get("status") == "REVIEW_RECOMMENDED":
+        forensic_ui = "REVIEW REQUIRED"
+    else:
+        forensic_ui = "NO STRONG SIGNAL"
+
+    return [
+        {
+            "name": "File format / signature check",
+            "status": "PASSED" if file_format_valid else "FAILED",
+        },
+        {
+            "name": "Document structure check",
+            "status": "PASSED" if structure_valid else "FAILED",
+        },
+        {
+            "name": "OCR readability check",
+            "status": "PASSED" if analysis.get("ocr_status") == "TEXT_DETECTED" and ocr_conf >= 45 else "REVIEW REQUIRED",
+        },
+        {
+            "name": "Document type detection",
+            "status": document_status,
+        },
+        {
+            "name": "Document type confidence",
+            "status": detection_conf,
+        },
+        {
+            "name": "Document-specific validation",
+            "status": validation.get("overall_status", "REVIEW") if category != "UNKNOWN" else "REVIEW",
+        },
+        {
+            "name": "Cross-field consistency",
+            "status": cross.get("status", "REVIEW"),
+        },
+        {
+            "name": "QR verification",
+            "status": qr_ui,
+        },
+        {
+            "name": "Image quality",
+            "status": quality.get("status", "NOT APPLICABLE"),
+        },
+        {
+            "name": "Tampering / forensic screening",
+            "status": forensic_ui,
+        },
+    ]
+
+
+# ============================================================
+# FINAL OCR IDENTIFIER RECOVERY OVERRIDE
+# ============================================================
+def _targeted_identifier_ocr(image):
+    """Fast identifier recovery for small numbers near the lower document edge."""
+    results = []
+    rgb = None
+    try:
+        rgb = fix_orientation(image).convert("RGB")
+        width, height = rgb.size
+        language = get_ocr_language()
+        for name, start_fraction in [("identifier_lower", 0.55), ("identifier_bottom", 0.72)]:
+            crop = None
+            enlarged = None
+            try:
+                crop = rgb.crop((0, int(height * start_fraction), width, height))
+                enlarged = crop.resize((max(1, crop.width * 2), max(1, crop.height * 2)), Image.Resampling.LANCZOS)
+                for pass_no, config in enumerate(("--oem 3 --psm 11", "--oem 3 --psm 12"), start=1):
+                    try:
+                        result = run_ocr_pass(enlarged, config, language)
+                        text = normalize_text(result.get("text", ""))
+                        if text:
+                            results.append({
+                                "name": f"{name}_psm_{pass_no}",
+                                "text": text,
+                                "confidence": float(result.get("confidence", 0) or 0),
+                                "tokens": result.get("tokens") or [],
+                            })
+                    except Exception as error:
+                        print("IDENTIFIER OCR PASS ERROR:", str(error))
+            finally:
+                safe_close(enlarged)
+                safe_close(crop)
+    except Exception as error:
+        print("IDENTIFIER OCR RECOVERY ERROR:", str(error))
+    finally:
+        safe_close(rgb)
+    return results
+
+
+# Final OCR wrapper: keep the original fast Tesseract pipeline as the primary path.
+_FINAL_EXTRACT_OCR_DATA = _LEGACY_EXTRACT_OCR_DATA
+
+def extract_ocr_data(image):
+    result = _FINAL_EXTRACT_OCR_DATA(image) or {}
+    text = normalize_text(result.get("raw_ocr_text", ""))
+    category = result.get("document_category") or result.get("document_detection", {}).get("document_category", "UNKNOWN")
+    structured = result.get("structured_data") or {}
+    confidence = float(result.get("ocr_confidence", 0) or 0)
+
+    # Reclassify the primary OCR result using the final detector.
+    detection = detect_document_type(text)
+    category = detection.get("document_category", category)
+    try:
+        refreshed = extract_fields_from_text(text, detection) or {}
+        for key, value in structured.items():
+            if value and not refreshed.get(key):
+                refreshed[key] = value
+        structured = refreshed
+    except Exception:
+        pass
+
+    result.update({
+        "document_detection": detection,
+        "document_category": category,
+        "document_label": detection.get("document_label", "Unknown Document"),
+        "document_detection_confidence": detection.get("confidence", "LOW"),
+        "structured_data": structured,
+        "extracted_data": structured,
+        "extracted": structured,
+    })
+
+    identifier_missing = (
+        (category == "AADHAAR_CARD" and not structured.get("aadhaar_number"))
+        or (category == "PAN_CARD" and not structured.get("pan_number"))
+        or (category == "PASSPORT" and not structured.get("passport_number"))
+        or (category == "DRIVING_LICENCE" and not structured.get("driving_licence_number"))
+        or (category == "VOTER_ID" and not structured.get("voter_id_number"))
+        or (category == "GST_DOCUMENT" and not structured.get("gstin"))
+    )
+
+    # Only two targeted OCR passes are added when an important identifier is
+    # missing. This fixes small bottom-of-card numbers without making every
+    # upload run a large preprocessing/OCR matrix.
+    if identifier_missing or not text or confidence < 35:
+        targeted = _targeted_identifier_ocr(image)
+        if targeted:
+            combined = normalize_text(
+                (text + "\n" + "\n".join(x.get("text", "") for x in targeted)).strip()
+            )[:MAX_OCR_TEXT_LENGTH]
+            detection = detect_document_type(combined)
+            merged = extract_fields_from_text(combined, detection) or {}
+            for key, value in structured.items():
+                if value and not merged.get(key):
+                    merged[key] = value
+            merged = _merge_identifier_fields(merged, combined, detection.get("document_category", "UNKNOWN"))
+            result.update({
+                "raw_ocr_text": combined,
+                "extracted_text": combined,
+                "ocr_status": "TEXT_DETECTED" if combined else "NO_TEXT_DETECTED",
+                "document_detection": detection,
+                "document_category": detection.get("document_category", "UNKNOWN"),
+                "document_label": detection.get("document_label", "Unknown Document"),
+                "document_detection_confidence": detection.get("confidence", "LOW"),
+                "structured_data": merged,
+                "extracted_data": merged,
+                "extracted": merged,
+                "ocr_recovery_passes": [x.get("name") for x in targeted],
+                "ocr_recovery_text": "\n".join(x.get("text", "") for x in targeted),
+                "ocr_tokens": list(result.get("ocr_tokens") or []) + [
+                    token for item in targeted for token in (item.get("tokens") or [])
+                ],
+            })
+            result["ocr_confidence"] = max(
+                float(result.get("ocr_confidence", 0) or 0),
+                max((float(x.get("confidence", 0) or 0) for x in targeted), default=0.0),
+            )
+
+    return result
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
