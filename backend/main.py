@@ -58,7 +58,7 @@ except Exception:
 
 app = FastAPI(
     title="SecureDoc AI Backend",
-    version="5.1.0",
+    version="6.2.0",
 )
 
 
@@ -69,7 +69,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -103,8 +103,8 @@ MAX_OCR_TEXT_LENGTH = 25000
 
 MAX_PDF_OCR_PAGES = 5
 
-OCR_TARGET_WIDTH = 2000
-OCR_MAX_DIMENSION = 3200
+OCR_TARGET_WIDTH = 1600
+OCR_MAX_DIMENSION = 2400
 
 # ============================================================
 # DOCUMENT LABELS
@@ -1900,7 +1900,6 @@ def extract_driving_licence_number(text):
     if not text:
         return None 
 
-    print("DRIVING LICENCE OCR TEXT:", repr(text))
 
     upper_text = text.upper()
 
@@ -2225,44 +2224,16 @@ NAME_BLOCKED_WORDS = {
 
 
 def normalize_name(value):
-
-    value = clean_field_value(
-        value
-    )
-
+    value = clean_field_value(value)
     if not value:
         return None
-
-    value = re.sub(
-        r"\s+",
-        " ",
-        value,
-    )
-
+    value = re.sub(r"\s+", " ", value).strip()
     words = []
-
     for word in value.split():
-
-        word = re.sub(
-            r"[^A-Za-z'-]",
-            "",
-            word,
-        )
-
+        word = re.sub(r"[^A-Za-z\u0900-\u097F\'-]", "", word)
         if word:
-
-            words.append(
-                word
-            )
-
-    if not words:
-
-        return None
-
-    return " ".join(
-        words
-    )
-
+            words.append(word)
+    return " ".join(words) if words else None
 
 def is_valid_name(value):
 
@@ -3397,28 +3368,36 @@ def extract_ocr_data(image):
     Fast + reliable Tesseract OCR.
 
     Strategy:
-    1. One fast PSM 6 OCR pass for normal documents.
-    2. PSM 11 fallback only when OCR is genuinely weak.
-    3. No unnecessary OCR variants.
-    4. Preserve existing document detection and field extraction.
+    1. Fast standard PSM 6 pass.
+    2. PSM 11 only when the first result is weak/incomplete.
+    3. One enhanced grayscale pass only when both results are weak.
+    4. Select the best/most useful OCR result.
     """
 
     language = get_ocr_language()
     candidates = []
     original_image = None
+    enhanced_image = None
 
     try:
         # --------------------------------------------------------
-        # PREPARE OCR IMAGE
+        # PREPARE ONE NORMAL OCR IMAGE
         # --------------------------------------------------------
-        original_image = fix_orientation(image).convert("RGB")
-        original_image = resize_for_ocr(original_image)
+        original_image = fix_orientation(
+            image
+        ).convert("RGB")
+
+        original_image = resize_for_ocr(
+            original_image
+        )
 
         # --------------------------------------------------------
         # ADD OCR RESULT
         # --------------------------------------------------------
         def add_candidate(result, variant_name, config):
-            text = normalize_text(result.get("text", ""))
+            text = normalize_text(
+                result.get("text", "")
+            )
 
             if not text:
                 return
@@ -3426,24 +3405,28 @@ def extract_ocr_data(image):
             result["variant"] = variant_name
             result["engine"] = "tesseract"
 
-            detection = detect_document_type(text)
+            detection = detect_document_type(
+                text
+            )
 
             structured = extract_fields_from_text(
                 text,
                 detection,
             )
 
-            # OCR quality score
+            # Normal OCR quality score
             score = text_quality_score(
                 text,
                 result.get("confidence", 0),
             )
 
-            # Document type detected
+            # Give extra value to OCR results that
+            # successfully identify a document.
             if detection.get("document_category") != "UNKNOWN":
                 score += 5
 
-            # Important document fields
+            # Give extra value to results containing
+            # important document numbers.
             important_fields = (
                 "aadhaar_number",
                 "pan_number",
@@ -3462,14 +3445,18 @@ def extract_ocr_data(image):
 
             score += found_fields * 8
 
-            result["score"] = round(score, 2)
+            result["score"] = round(
+                score,
+                2,
+            )
+
             result["detection"] = detection
             result["structured"] = structured
 
             candidates.append(result)
 
         # --------------------------------------------------------
-        # PASS 1 — FAST STANDARD OCR
+        # PASS 1 - FAST STANDARD OCR
         # --------------------------------------------------------
         result = run_ocr_pass(
             original_image,
@@ -3493,7 +3480,9 @@ def extract_ocr_data(image):
         )
 
         confidence = (
-            float(best.get("confidence", 0) or 0)
+            float(
+                best.get("confidence", 0) or 0
+            )
             if best
             else 0.0
         )
@@ -3517,20 +3506,37 @@ def extract_ocr_data(image):
             else 0
         )
 
+        important_fields = (
+            "aadhaar_number",
+            "pan_number",
+            "driving_licence_number",
+            "passport_number",
+            "visa_number",
+            "voter_id_number",
+            "gstin",
+        )
+
+        important_field_count = (
+            sum(
+                1
+                for field in important_fields
+                if best.get("structured", {}).get(field)
+            )
+            if best
+            else 0
+        )
+
         # --------------------------------------------------------
-        # FAST FALLBACK DECISION
+        # PASS 2 - PSM 11 ONLY FOR GENUINELY WEAK OCR
         # --------------------------------------------------------
-        #
-        # IMPORTANT:
-        # Do NOT run PSM 11 merely because an important field
-        # was not detected. Field extraction can fail even when
-        # OCR itself is good.
-        #
-        # PSM 11 is used only when the OCR result is actually weak.
-        # --------------------------------------------------------
+        # Keep the common path to one Tesseract pass. This is the
+        # main speed improvement for the Render deployment.
         needs_second_pass = (
             best is None
-            or confidence < 45
+            or confidence < 40
+            or not normalize_text(
+                best.get("text", "")
+            )
             or text_length < 25
         )
 
@@ -3545,6 +3551,61 @@ def extract_ocr_data(image):
                 result,
                 "original_psm11",
                 "--oem 3 --psm 11",
+            )
+
+        # --------------------------------------------------------
+        # CHECK AGAIN
+        # --------------------------------------------------------
+        best = max(
+            candidates,
+            key=lambda item: item.get("score", -999),
+            default=None,
+        )
+
+        confidence = (
+            float(
+                best.get("confidence", 0) or 0
+            )
+            if best
+            else 0.0
+        )
+
+        category = (
+            best.get("detection", {}).get(
+                "document_category",
+                "UNKNOWN",
+            )
+            if best
+            else "UNKNOWN"
+        )
+
+        # --------------------------------------------------------
+        # PASS 3 - ENHANCED OCR ONLY FOR DIFFICULT DOCUMENTS
+        # --------------------------------------------------------
+        needs_enhancement = (
+            best is None
+            or confidence < 30
+            or not normalize_text(
+                best.get("text", "")
+            )
+        )
+
+        if needs_enhancement:
+
+            enhanced_image = create_enhanced_gray(
+                original_image
+            )
+
+            result = run_ocr_pass(
+                enhanced_image,
+                "--oem 3 --psm 6",
+                language,
+            )
+
+            add_candidate(
+                result,
+                "enhanced_gray_psm6",
+                "--oem 3 --psm 6",
             )
 
         # --------------------------------------------------------
@@ -3621,10 +3682,18 @@ def extract_ocr_data(image):
 
         candidate_summary = [
             {
-                "variant": candidate.get("variant"),
-                "engine": candidate.get("engine"),
-                "confidence": candidate.get("confidence"),
-                "score": candidate.get("score"),
+                "variant": candidate.get(
+                    "variant"
+                ),
+                "engine": candidate.get(
+                    "engine"
+                ),
+                "confidence": candidate.get(
+                    "confidence"
+                ),
+                "score": candidate.get(
+                    "score"
+                ),
                 "document": final_detection.get(
                     "document_label"
                 ),
@@ -3636,7 +3705,11 @@ def extract_ocr_data(image):
             "extracted_text": raw_ocr_text,
             "raw_ocr_text": raw_ocr_text,
             "ocr_confidence": float(
-                best.get("confidence", 0) or 0
+                best.get(
+                    "confidence",
+                    0
+                )
+                or 0
             ),
             "ocr_status": (
                 "TEXT_DETECTED"
@@ -3645,12 +3718,17 @@ def extract_ocr_data(image):
             ),
             "ocr_language": language,
             "ocr_engine": "tesseract",
-            "ocr_variant": best.get("variant"),
-            "ocr_candidates_tested": len(candidates),
+            "ocr_variant": best.get(
+                "variant"
+            ),
+            "ocr_candidates_tested": len(
+                candidates
+            ),
             "document_detection": final_detection,
             "structured_data": structured_data,
             "field_confidence": field_confidence,
             "candidate_summary": candidate_summary,
+            "ocr_tokens": best.get("tokens", []),
         }
 
     except Exception as error:
@@ -3667,8 +3745,12 @@ def extract_ocr_data(image):
             "ocr_language": language,
             "ocr_engine": "tesseract",
             "ocr_variant": None,
-            "ocr_candidates_tested": len(candidates),
-            "document_detection": detect_document_type(""),
+            "ocr_candidates_tested": len(
+                candidates
+            ),
+            "document_detection": detect_document_type(
+                ""
+            ),
             "structured_data": {},
             "field_confidence": {},
             "candidate_summary": [],
@@ -3678,7 +3760,14 @@ def extract_ocr_data(image):
         # --------------------------------------------------------
         # FREE MEMORY
         # --------------------------------------------------------
-        safe_close(original_image)
+        safe_close(
+            enhanced_image
+        )
+
+        safe_close(
+            original_image
+        )
+
 # ============================================================
 # DISPLAY TEXT
 # ============================================================
@@ -4260,6 +4349,213 @@ def analyze_image_region_consistency(
     return result
 
 
+# ============================================================
+# LOCAL TEXT REGION TAMPERING ANALYSIS
+# ============================================================
+
+def analyze_text_region_for_tampering(image, x, y, w, h):
+    """
+    Local forensic screening around an OCR-detected text region.
+    This is a supporting signal, NOT proof of forgery.
+    """
+
+    try:
+        import cv2
+        import numpy as np
+
+        if image is None or w <= 2 or h <= 2:
+            return {
+                "suspicious": False,
+                "score": 0.0,
+                "reason": "Invalid text region"
+            }
+
+        # Accept both PIL images and OpenCV/numpy images.
+        if hasattr(image, "convert"):
+            rgb = np.ascontiguousarray(
+                np.asarray(image.convert("RGB"), dtype=np.uint8)
+            )
+            if rgb.ndim == 2:
+                gray_full = rgb
+            else:
+                gray_full = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        else:
+            array = np.ascontiguousarray(image)
+            if array.ndim == 2:
+                gray_full = array
+            else:
+                gray_full = cv2.cvtColor(array, cv2.COLOR_BGR2GRAY)
+
+        height, width = gray_full.shape[:2]
+
+        margin_x = max(4, int(w * 0.35))
+        margin_y = max(4, int(h * 0.60))
+
+        x1 = max(0, int(x) - margin_x)
+        y1 = max(0, int(y) - margin_y)
+        x2 = min(width, int(x) + int(w) + margin_x)
+        y2 = min(height, int(y) + int(h) + margin_y)
+
+        roi = gray_full[y1:y2, x1:x2]
+
+        if roi.size == 0:
+            return {
+                "suspicious": False,
+                "score": 0.0,
+                "reason": "Empty region"
+            }
+
+        blur = cv2.GaussianBlur(roi, (3, 3), 0)
+        noise = cv2.absdiff(roi, blur)
+        noise_std = float(np.std(noise))
+
+        edges = cv2.Canny(roi, 80, 180)
+        edge_density = float(np.mean(edges > 0))
+
+        sharpness = float(cv2.Laplacian(roi, cv2.CV_64F).var())
+
+        signals = []
+
+        if noise_std > 18:
+            signals.append("unusual local noise")
+
+        if edge_density > 0.28:
+            signals.append("unusual local edge density")
+
+        if sharpness > 1800:
+            signals.append("unusual local sharpness")
+
+        suspicious = len(signals) >= 2
+
+        if suspicious:
+            score = min(1.0, 0.30 + 0.15 * len(signals))
+        else:
+            score = min(0.25, 0.08 * len(signals))
+
+        return {
+            "suspicious": suspicious,
+            "score": round(score, 3),
+            "reason": ", ".join(signals) if signals else "No strong local forensic signal",
+            "region": {
+                "x": int(x1),
+                "y": int(y1),
+                "width": int(x2 - x1),
+                "height": int(y2 - y1)
+            },
+            "signals": signals,
+            "metrics": {
+                "noise_std": round(noise_std, 3),
+                "edge_density": round(edge_density, 4),
+                "sharpness": round(sharpness, 2),
+            },
+        }
+
+    except Exception as e:
+        return {
+            "suspicious": False,
+            "score": 0.0,
+            "reason": f"Local analysis unavailable: {str(e)}"
+        }
+
+
+def analyze_targeted_text_regions(image, ocr_tokens, structured):
+    """
+    Run local forensic checks only on OCR regions belonging to
+    important extracted fields. This keeps the signal focused on
+    likely editable fields such as name, DOB and document number.
+    """
+
+    result = {
+        "available": False,
+        "suspicious": False,
+        "suspicious_fields": [],
+        "regions": [],
+        "region_count": 0,
+    }
+
+    if not CV2_AVAILABLE or image is None:
+        return result
+
+    tokens = [
+        token for token in (ocr_tokens or [])
+        if isinstance(token, dict)
+        and token.get("text")
+        and int(token.get("width", 0) or 0) > 2
+        and int(token.get("height", 0) or 0) > 2
+    ]
+
+    if not tokens:
+        return result
+
+    # Only fields whose visual text is useful for targeted tamper screening.
+    target_fields = [
+        "name",
+        "date_of_birth",
+        "aadhaar_number",
+        "pan_number",
+        "driving_licence_number",
+        "passport_number",
+        "voter_id_number",
+        "gstin",
+    ]
+
+    def norm(value):
+        return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+    def token_matches_field(token_text, field_value):
+        token_norm = norm(token_text)
+        value_norm = norm(field_value)
+        if not token_norm or not value_norm:
+            return False
+        if token_norm in value_norm or value_norm in token_norm:
+            return True
+        # Match meaningful words inside a multi-word name.
+        parts = [part for part in re.findall(r"[a-z0-9]+", str(field_value).lower()) if len(part) >= 3]
+        return any(part == token_norm for part in parts)
+
+    for field in target_fields:
+        value = structured.get(field)
+        if not value:
+            continue
+
+        matching = [
+            token for token in tokens
+            if token_matches_field(token.get("text", ""), value)
+        ]
+
+        if not matching:
+            continue
+
+        # Limit repeated OCR fragments so one field cannot dominate the score.
+        matching = matching[:6]
+
+        for token in matching:
+            analysis = analyze_text_region_for_tampering(
+                image,
+                int(token.get("left", 0) or 0),
+                int(token.get("top", 0) or 0),
+                int(token.get("width", 0) or 0),
+                int(token.get("height", 0) or 0),
+            )
+
+            region_entry = {
+                "field": field,
+                "text": str(token.get("text", "")),
+                "confidence": float(token.get("confidence", 0) or 0),
+                **analysis,
+            }
+            result["regions"].append(region_entry)
+
+            if analysis.get("suspicious"):
+                result["suspicious"] = True
+                if field not in result["suspicious_fields"]:
+                    result["suspicious_fields"].append(field)
+
+    result["available"] = bool(result["regions"])
+    result["region_count"] = len(result["regions"])
+    return result
+
+
 def analyze_document_tampering(
     image,
     metadata,
@@ -4763,6 +5059,13 @@ def analyze_image(
                 )
             ),
 
+            "ocr_tokens": (
+                ocr.get(
+                    "ocr_tokens",
+                    []
+                )
+            ),
+
             "extracted_characters": len(
                 raw_text
             ),
@@ -4895,8 +5198,8 @@ def analyze_pdf(
 
             pix = page.get_pixmap(
                 matrix=fitz.Matrix(
-                    2.5,
-                    2.5,
+                    1.8,
+                    1.8,
                 ),
                 alpha=False,
             )
@@ -5428,622 +5731,748 @@ def build_validation_results(
 
 
 
+
 # ============================================================
-# FORENSIC UPGRADE PATCH — DOCUMENT-SPECIFIC SIGNALS
+# SECUREDOC AI — ENHANCEMENT LAYER (PRESERVE OLD OCR)
 # ============================================================
+# IMPORTANT: The original OCR/extraction implementations above remain the
+# primary path. This layer only AUGMENTS missing evidence; it does not replace
+# a successful legacy OCR result.
 
-_base_analyze_image = analyze_image
-_base_build_validation_results = build_validation_results
+APP_VERSION = "6.2.0"
 
-_VERHOEFF_D = (
-    (0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
-    (1, 5, 7, 6, 2, 8, 3, 0, 9, 4),
-    (5, 8, 0, 3, 7, 9, 6, 1, 4, 2),
-    (8, 9, 1, 6, 0, 4, 3, 5, 2, 7),
-    (9, 4, 5, 3, 1, 2, 6, 8, 7, 0),
-    (4, 2, 8, 6, 5, 7, 3, 9, 0, 1),
-    (2, 7, 9, 3, 8, 0, 6, 4, 1, 5),
-    (7, 0, 4, 6, 9, 1, 3, 2, 5, 8),
-    (6, 3, 4, 2, 8, 0, 7, 5, 1, 9),
-    (3, 6, 2, 7, 5, 1, 9, 8, 0, 4),
-)
 
-_VERHOEFF_P = (
-    (0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
-    (1, 5, 7, 6, 2, 8, 3, 0, 9, 4),
-    (5, 8, 0, 3, 7, 9, 6, 1, 4, 2),
-    (8, 9, 1, 6, 0, 4, 3, 5, 2, 7),
-    (9, 4, 5, 3, 1, 2, 6, 8, 7, 0),
-    (4, 2, 8, 6, 5, 7, 3, 9, 0, 1),
-    (2, 7, 9, 3, 8, 0, 6, 4, 1, 5),
-    (7, 0, 4, 6, 9, 1, 3, 2, 5, 8),
-)
+def _safe_float(value, default=0.0):
+    try:
+        return float(value or 0)
+    except Exception:
+        return default
 
-def is_valid_aadhaar_number(value):
-    digits = re.sub(r"\D", "", str(value or ""))
 
-    if len(digits) != 12:
-        return False
-
-    checksum = 0
-
-    for index, char in enumerate(reversed(digits)):
-        checksum = _VERHOEFF_D[
-            checksum
-        ][
-            _VERHOEFF_P[index % 8][int(char)]
+def _targeted_ocr_recovery(image):
+    """Run two small recovery passes only when the old OCR missed useful data."""
+    results = []
+    try:
+        rgb = fix_orientation(image).convert("RGB")
+        width, height = rgb.size
+        regions = [
+            ("bottom_psm11", 0.58, "--oem 3 --psm 11"),
+            ("bottom_psm12", 0.48, "--oem 3 --psm 12"),
         ]
+        language = get_ocr_language()
+        for name, start_ratio, config in regions:
+            crop = None
+            try:
+                crop = rgb.crop((0, int(height * start_ratio), width, height))
+                item = run_ocr_pass(crop, config, language)
+                text = normalize_text(item.get("text", ""))
+                if text:
+                    results.append({
+                        "name": name,
+                        "text": text,
+                        "confidence": _safe_float(item.get("confidence")),
+                        "tokens": item.get("tokens") or [],
+                    })
+            except Exception:
+                continue
+            finally:
+                safe_close(crop)
+        safe_close(rgb)
+    except Exception:
+        pass
+    return results
 
-    return checksum == 0
+
+def _identifier_missing(category, structured):
+    structured = structured or {}
+    return (
+        (category == "AADHAAR_CARD" and not structured.get("aadhaar_number"))
+        or (category == "PAN_CARD" and not structured.get("pan_number"))
+        or (category == "PASSPORT" and not structured.get("passport_number"))
+        or (category == "DRIVING_LICENCE" and not structured.get("driving_licence_number"))
+        or (category == "VOTER_ID" and not structured.get("voter_id_number"))
+        or (category == "GST_DOCUMENT" and not structured.get("gstin"))
+    )
 
 
-def detect_faces_in_document(image):
-    result = {
-        "available": False,
-        "face_count": 0,
-        "status": "NOT_AVAILABLE",
-        "description": "Face detection is not available.",
-        "faces": [],
-    }
-    if not CV2_AVAILABLE or cv2 is None:
-        result["status"] = "OPENCV_NOT_AVAILABLE"
-        result["description"] = "OpenCV is not available in this backend."
-        return result
-    if not hasattr(cv2, "CascadeClassifier") or not hasattr(cv2, "data"):
-        result["status"] = "OPENCV_INCOMPATIBLE"
-        result["description"] = (
-            "Installed OpenCV build does not provide the Haar face detector API. "
-            "Install a stable OpenCV build and restart the backend."
-        )
-        return result
-    try:
-        rgb = image.convert("RGB")
-        array = np.ascontiguousarray(np.asarray(rgb, dtype=np.uint8))
-        gray = cv2.cvtColor(array, cv2.COLOR_RGB2GRAY)
-        cascade_path = os.path.join(
-            cv2.data.haarcascades,
-            "haarcascade_frontalface_default.xml",
-        )
-        detector = cv2.CascadeClassifier(cascade_path)
-        if detector.empty():
-            result["status"] = "MODEL_LOAD_ERROR"
-            result["description"] = "Face detection model could not be loaded."
-            return result
-        faces = detector.detectMultiScale(
-            gray,
-            scaleFactor=1.08,
-            minNeighbors=4,
-            minSize=(30, 30),
-        )
-        detected = [
-            {"x": int(x), "y": int(y), "width": int(w), "height": int(h)}
-            for x, y, w, h in faces
-        ]
-        count = len(detected)
-        if count == 0:
-            status, description = "NO_FACE_DETECTED", "No face detected in the document image."
-        elif count == 1:
-            status, description = "ONE_FACE_DETECTED", "One face detected in the document image."
-        else:
-            status = "MULTIPLE_FACES_DETECTED"
-            description = f"{count} faces detected. Manual review is recommended."
-        return {
-            "available": True,
-            "face_count": count,
-            "status": status,
-            "description": description,
-            "faces": detected,
-        }
-    except Exception as error:
-        print("FACE DETECTION ERROR:", repr(error))
-        result["status"] = "PROCESSING_FAILED"
-        result["description"] = f"Face detection failed: {str(error)}"
-        result["error"] = str(error)
+def _enhance_analysis_preserving_legacy(file_content, analysis_data):
+    """Additive enhancement layer: legacy OCR/extraction stays authoritative."""
+    result = dict(analysis_data or {})
+    if not result.get("valid"):
         return result
 
+    # Always expose quality guidance without changing extraction.
+    result["quality_guidance"] = _quality_guidance(result.get("image_quality") or {})
+    result["ocr_confidence_raw"] = _safe_float(result.get("ocr_confidence"))
+    result["ocr_confidence_quality_adjusted"] = _quality_adjusted_confidence(
+        result.get("ocr_confidence"), result.get("image_quality") or {}
+    )
 
-def analyze_qr_signal(image, structured):
-    result = {
-        "available": False,
-        "status": "NOT_AVAILABLE",
-        "decoded": False,
-        "data_consistent": None,
-    }
-    if not CV2_AVAILABLE or cv2 is None or not hasattr(cv2, "QRCodeDetector"):
-        return result
-    try:
-        array = np.ascontiguousarray(np.asarray(image.convert("RGB"), dtype=np.uint8))
-        detector = cv2.QRCodeDetector()
-        data, points, _ = detector.detectAndDecode(array)
-        if not data:
-            result["available"] = True
-            result["status"] = "NOT_DECODED"
-            return result
-        result["available"] = True
-        result["decoded"] = True
-        result["status"] = "DECODED"
-        result["data_length"] = len(data)
-        aadhaar = re.sub(r"\D", "", str(structured.get("aadhaar_number") or ""))
-        qr_digits = re.sub(r"\D", "", data)
-        if len(aadhaar) == 12 and len(qr_digits) >= 12:
-            result["data_consistent"] = aadhaar in qr_digits
-            if not result["data_consistent"]:
-                result["status"] = "DATA_MISMATCH"
-        return result
-    except Exception as error:
-        result["status"] = "ERROR"
-        result["error"] = str(error)
-        return result
+    if result.get("file_category") == "IMAGE":
+        image = None
+        try:
+            image = Image.open(io.BytesIO(file_content))
+            image.load()
+            image = fix_orientation(image)
 
-
-def analyze_image(file_content):
-    data = _base_analyze_image(file_content)
-    if not data.get("valid"):
-        return data
-    try:
-        image = Image.open(io.BytesIO(file_content))
-        image.load()
-        image = fix_orientation(image)
-        # Face detection already runs in the base image analysis.
-        # Reuse that result here to avoid a duplicate pass.
-        data["metadata_analysis"] = analyze_metadata_tampering(data.get("metadata") or {})
-        data["ela"] = perform_error_level_analysis(image)
-        data["region_consistency"] = analyze_image_region_consistency(image)
-        data["qr_analysis"] = analyze_qr_signal(
-            image,
-            data.get("structured_data") or {},
-        )
-        safe_close(image)
-    except Exception as error:
-        data["forensic_error"] = str(error)
-    return data
-
-
-def calculate_risk(file_format_valid, structure_valid, file_size, analysis):
-    score = 0
-    signals = []
-
-    if not file_format_valid:
-        score += 45
-        signals.append("File signature does not match declared content type")
-    if not structure_valid:
-        score += 35
-        signals.append("Document could not be parsed successfully")
-    if file_size > 8 * 1024 * 1024:
-        score += 5
-        signals.append("Large file size")
-
-    ocr_status = analysis.get("ocr_status", "NO_TEXT_DETECTED")
-    ocr_confidence = float(analysis.get("ocr_confidence", 0) or 0)
-    if ocr_status == "NO_TEXT_DETECTED":
-        score += 8
-        signals.append("No readable text detected")
-    elif 0 < ocr_confidence < 40:
-        score += 12
-        signals.append("Low OCR readability confidence")
-    elif 0 < ocr_confidence < 60:
-        score += 6
-        signals.append("Moderate OCR readability confidence")
-
-    quality = analysis.get("image_quality") or {}
-    for issue in quality.get("issues", []):
-        score += 4
-        signals.append(issue)
-
-    if analysis.get("encrypted"):
-        score += 8
-        signals.append("PDF is encrypted")
-
-    category = analysis.get("document_category", "UNKNOWN")
-    structured = analysis.get("structured_data") or {}
-
-    # UNKNOWN DOCUMENT RISK
-    if category == "UNKNOWN":
-        score += 50
-        signals.append(
-            "Document type could not be identified reliably"
-        )
-
-        if not structured:
-            score += 30
-            signals.append(
-                "No reliable structured document data extracted"
+            # QR is additive and neutral when absent/unreadable.
+            result["qr_analysis"] = _detect_qr_data(image)
+            result["qr_verification"] = result["qr_analysis"]
+            result["qr_field_cross_check"] = _compare_qr_with_fields(
+                result["qr_analysis"], result.get("structured_data") or {}
             )
 
-    if category == "AADHAAR_CARD":
-        aadhaar = re.sub(r"\D", "", str(structured.get("aadhaar_number") or ""))
-        if len(aadhaar) == 12:
-            if not is_valid_aadhaar_number(aadhaar):
-                score += 40
-                signals.append("Extracted Aadhaar number fails checksum validation")
+            try:
+                result["tampering_analysis"] = analyze_document_tampering(
+                    image, result.get("metadata") or {}
+                )
+            except Exception:
+                result["tampering_analysis"] = {
+                    "status": "ANALYSIS_UNAVAILABLE",
+                    "tampering_probability": 0,
+                    "risk_level": "UNKNOWN",
+                    "signals": [],
+                }
+
+            structured = dict(result.get("structured_data") or {})
+            category = str(result.get("document_category", "UNKNOWN")).upper()
+            raw_text = normalize_text(result.get("raw_ocr_text", ""))
+            ocr_conf = _safe_float(result.get("ocr_confidence"))
+
+            # Targeted recovery only when useful information is missing/weak.
+            if _identifier_missing(category, structured) or not raw_text or ocr_conf < 35:
+                recovery = _targeted_ocr_recovery(image)
+                useful = [x for x in recovery if normalize_text(x.get("text", ""))]
+                if useful:
+                    recovery_text = normalize_text("\n".join(x["text"] for x in useful))
+                    combined = normalize_text((raw_text + "\n" + recovery_text).strip())[:MAX_OCR_TEXT_LENGTH]
+                    combined_detection = detect_document_type(combined)
+                    recovered = extract_fields_from_text(combined, combined_detection) or {}
+
+                    # CRITICAL: legacy non-empty values always win.
+                    for key, value in structured.items():
+                        if value:
+                            recovered[key] = value
+
+                    # Never let recovery change a previously known document category
+                    # unless the legacy category was UNKNOWN.
+                    legacy_category = category
+                    new_category = combined_detection.get("document_category", "UNKNOWN")
+                    if legacy_category != "UNKNOWN":
+                        final_detection = result.get("document_detection") or {}
+                        final_category = legacy_category
+                        final_label = result.get("document_label", DOCUMENT_LABELS.get(legacy_category, "Unknown Document"))
+                        final_conf = result.get("document_detection_confidence", "LOW")
+                    else:
+                        final_detection = combined_detection
+                        final_category = new_category
+                        final_label = combined_detection.get("document_label", "Unknown Document")
+                        final_conf = combined_detection.get("confidence", "LOW")
+
+                    result["structured_data"] = recovered
+                    result["extracted_data"] = recovered
+                    result["extracted"] = recovered
+                    result["raw_ocr_text"] = combined
+                    result["extracted_text"] = combined
+                    result["ocr_status"] = "TEXT_DETECTED" if combined else "NO_TEXT_DETECTED"
+                    result["ocr_recovery_passes"] = [x["name"] for x in useful]
+                    result["ocr_recovery_text"] = recovery_text
+                    result["ocr_recovery_confidence"] = round(max(_safe_float(x.get("confidence")) for x in useful), 1)
+                    result["ocr_confidence_primary"] = ocr_conf
+                    result["ocr_confidence"] = round(
+                        min(100.0, (ocr_conf * 0.75) + (result["ocr_recovery_confidence"] * 0.25)), 1
+                    )
+                    result["document_detection"] = final_detection
+                    result["document_category"] = final_category
+                    result["document_label"] = final_label
+                    result["document_detection_confidence"] = final_conf
+                    result["display_text"] = build_display_text(recovered)
+                    result["qr_field_cross_check"] = _compare_qr_with_fields(
+                        result.get("qr_analysis") or {}, recovered
+                    )
+
+            # Passport MRZ is verification-only and never overwrites legacy fields.
+            if category == "PASSPORT" or str(result.get("document_category", "")).upper() == "PASSPORT":
+                mrz = _extract_mrz_passport(result.get("raw_ocr_text", ""))
+                result["passport_mrz"] = mrz
+                result["passport_mrz_cross_check"] = _compare_mrz_with_fields(
+                    mrz, result.get("structured_data") or {}
+                )
+            else:
+                result["passport_mrz"] = {"detected": False, "source": "passport_mrz_ocr"}
+                result["passport_mrz_cross_check"] = {"status": "NOT_APPLICABLE", "matches": [], "mismatches": []}
+        except Exception:
+            # Enhancement failures must never destroy the legacy analysis result.
+            pass
+        finally:
+            safe_close(image)
+
+    raw_text = normalize_text(result.get("raw_ocr_text", ""))
+    result["document_marking_signals"] = detect_demo_or_mockup_signals(raw_text)
+    result["screening_version"] = APP_VERSION
+    enhancement = _build_enhancement_summary(result)
+    result.update(enhancement)
+    return result
+
+
+
+# ============================================================
+# SAFE ENHANCEMENT LAYER — DOES NOT REPLACE LEGACY EXTRACTION
+# ============================================================
+
+def _quality_guidance(quality):
+    """Turn image-quality metrics into human-readable guidance only."""
+    q = quality or {}
+    try:
+        blur = float(q.get("blur_score", q.get("blur", 0)) or 0)
+    except Exception:
+        blur = 0.0
+    try:
+        resolution = float(q.get("resolution_score", q.get("resolution", 0)) or 0)
+    except Exception:
+        resolution = 0.0
+    try:
+        skew = abs(float(q.get("skew_angle", q.get("skew", 0)) or 0))
+    except Exception:
+        skew = 0.0
+
+    warnings = []
+    if blur and blur < 60:
+        warnings.append("Image may be blurry; OCR reliability can be reduced")
+    if resolution and resolution < 60:
+        warnings.append("Image resolution is limited; a clearer scan may improve OCR")
+    if skew > 5:
+        warnings.append("Document is noticeably skewed; OCR may be less reliable")
+
+    if len(warnings) >= 2:
+        status = "POOR"
+    elif warnings:
+        status = "FAIR"
+    else:
+        status = "GOOD"
+    return {"status": status, "warnings": warnings}
+
+
+def _safe_mask_identifier(value, keep_start=2, keep_end=2):
+    if not value:
+        return ""
+    text = str(value).strip()
+    compact = re.sub(r"\s+", "", text)
+    if len(compact) <= keep_start + keep_end:
+        return "*" * len(compact)
+    return compact[:keep_start] + ("*" * (len(compact) - keep_start - keep_end)) + compact[-keep_end:]
+
+
+def _field_source_hint(field, value, raw_text):
+    """Conservative provenance hint; it never changes the extracted value."""
+    if not value:
+        return "not_extracted"
+    text = normalize_text(raw_text).lower()
+    v = normalize_single_line(value).lower()
+    labels = {
+        "name": ["name", "full name", "surname", "given name"],
+        "date_of_birth": ["date of birth", "dob", "birth"],
+        "date_of_issue": ["date of issue", "issue date", "issued"],
+        "date_of_expiry": ["date of expiry", "expiry", "valid till", "valid until"],
+        "gender": ["gender", "sex"],
+        "nationality": ["nationality"],
+        "aadhaar_number": ["aadhaar", "aadhar"],
+        "pan_number": ["pan"],
+        "driving_licence_number": ["driving licence", "driving license", "dl no", "dl number"],
+        "passport_number": ["passport no", "passport number"],
+        "voter_id_number": ["epic", "voter id", "voter"],
+        "gstin": ["gstin", "gst no", "gst number"],
+    }
+    if any(label in text and v in text for label in labels.get(field, [])):
+        return "labelled_ocr"
+    return "ocr_extracted"
+
+
+def _build_field_provenance(structured, field_confidence, raw_text):
+    out = {}
+    for field, value in (structured or {}).items():
+        if field in {"document", "document_category"}:
+            continue
+        conf = _safe_float((field_confidence or {}).get(field), 0)
+        if value:
+            source = _field_source_hint(field, value, raw_text)
+            if conf >= 85:
+                reliability = "HIGH"
+            elif conf >= 60:
+                reliability = "MEDIUM"
+            else:
+                reliability = "LOW"
+            out[field] = {
+                "source": source,
+                "confidence": round(conf, 1),
+                "reliability": reliability,
+            }
         else:
-            score += 8
-            signals.append("Aadhaar document detected but no complete 12-digit number was extracted")
+            out[field] = {
+                "source": "not_extracted",
+                "confidence": 0,
+                "reliability": "LOW",
+            }
+    return out
 
-    metadata_analysis = analysis.get("metadata_analysis") or {}
-    if metadata_analysis.get("status") == "REVIEW":
-        score += 18
-        signals.append("Editing-software metadata signal requires review")
 
-    ela = analysis.get("ela") or {}
-    if ela.get("available") and ela.get("status") == "REVIEW":
-        ela_score = float(ela.get("score", 0) or 0)
-        score += min(25, max(10, int(ela_score * 0.30)))
-        signals.append("Error-level analysis shows unusual recompression differences")
+def _validate_identifiers(structured):
+    """Validation-only layer. It never rejects or rewrites legacy extracted values."""
+    data = structured or {}
+    checks = {}
 
-    consistency = analysis.get("region_consistency") or {}
-    suspicious_count = len(consistency.get("suspicious_regions") or [])
-    if suspicious_count:
-        score += min(25, 8 + suspicious_count * 3)
-        signals.append(f"{suspicious_count} locally inconsistent image region(s) detected")
+    def add(name, value, valid, note):
+        checks[name] = {
+            "present": bool(value),
+            "format_valid": bool(valid) if value else None,
+            "status": "VALID_FORMAT" if value and valid else ("INVALID_FORMAT" if value else "NOT_FOUND"),
+            "note": note,
+        }
+
+    aadhaar = data.get("aadhaar_number")
+    digits = re.sub(r"\D", "", str(aadhaar or ""))
+    add("aadhaar_number", aadhaar, len(digits) == 12, "12-digit format check only; not government verification")
+
+    pan = str(data.get("pan_number") or "").upper().replace(" ", "")
+    add("pan_number", data.get("pan_number"), bool(re.fullmatch(r"[A-Z]{5}[0-9]{4}[A-Z]", pan)), "PAN structural format check only")
+
+    passport = str(data.get("passport_number") or "").upper().replace(" ", "")
+    add("passport_number", data.get("passport_number"), 6 <= len(passport) <= 12 and any(c.isalpha() for c in passport) and any(c.isdigit() for c in passport), "Passport-number structural check only")
+
+    dl = str(data.get("driving_licence_number") or "").upper()
+    dl_compact = re.sub(r"[^A-Z0-9]", "", dl)
+    add("driving_licence_number", data.get("driving_licence_number"), len(dl_compact) >= 10 and dl_compact[:2].isalpha() and dl_compact[2:4].isdigit(), "Driving-licence structural check only")
+
+    voter = str(data.get("voter_id_number") or "").upper().replace(" ", "")
+    add("voter_id_number", data.get("voter_id_number"), 3 <= len(voter) <= 20 and bool(re.fullmatch(r"[A-Z0-9-]+", voter)), "Voter-ID structural check only")
+
+    gst = str(data.get("gstin") or "").upper().replace(" ", "")
+    add("gstin", data.get("gstin"), bool(re.fullmatch(r"[0-9A-Z]{15}", gst)), "GSTIN structural format check only")
+    return checks
+
+
+def _extract_mrz_passport(raw_text):
+    """Best-effort ICAO TD3 MRZ parser from OCR text; no OCR text is modified."""
+    lines = [re.sub(r"[^A-Z0-9<]", "", x.upper()) for x in normalize_text(raw_text).splitlines()]
+    lines = [x for x in lines if len(x) >= 30]
+    for i in range(len(lines) - 1):
+        a, b = lines[i], lines[i + 1]
+        if len(a) < 40 or len(b) < 40:
+            continue
+        if not (a.startswith("P<") or a.startswith("P")):
+            continue
+        # TD3 passport MRZ normally has 44 characters per line. OCR can lose a few.
+        if not (40 <= len(a) <= 46 and 40 <= len(b) <= 46):
+            continue
+        passport_no = b[:9].replace("<", "")
+        nationality = b[10:13].replace("<", "")
+        dob_raw = b[13:19]
+        sex = b[20:21]
+        expiry_raw = b[21:27]
+        name_raw = a[5:].replace("<", " ").strip()
+        name_parts = [x for x in name_raw.split() if x]
+        surname = name_parts[0] if name_parts else ""
+        given = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
+        def mrz_date(v):
+            if not re.fullmatch(r"\d{6}", v):
+                return None
+            yy, mm, dd = int(v[:2]), int(v[2:4]), int(v[4:6])
+            # Conservative century mapping for modern travel documents.
+            year = 2000 + yy if yy <= 49 else 1900 + yy
+            try:
+                return f"{dd:02d}/{mm:02d}/{year:04d}"
+            except Exception:
+                return None
+        return {
+            "detected": True,
+            "passport_number": passport_no or None,
+            "nationality": nationality or None,
+            "date_of_birth": mrz_date(dob_raw),
+            "date_of_expiry": mrz_date(expiry_raw),
+            "sex": {"M": "male", "F": "female", "X": "other"}.get(sex),
+            "surname": surname or None,
+            "given_names": given or None,
+            "source": "passport_mrz_ocr",
+        }
+    return {"detected": False, "source": "passport_mrz_ocr"}
+
+
+def _compare_mrz_with_fields(mrz, structured):
+    if not mrz or not mrz.get("detected"):
+        return {"status": "NOT_AVAILABLE", "matches": [], "mismatches": []}
+    matches, mismatches = [], []
+    pairs = [
+        ("passport_number", mrz.get("passport_number"), structured.get("passport_number")),
+        ("nationality", mrz.get("nationality"), structured.get("nationality")),
+        ("date_of_birth", mrz.get("date_of_birth"), structured.get("date_of_birth")),
+        ("date_of_expiry", mrz.get("date_of_expiry"), structured.get("date_of_expiry")),
+    ]
+    for field, a, b in pairs:
+        if not a or not b:
+            continue
+        na = re.sub(r"[^A-Z0-9]", "", str(a).upper())
+        nb = re.sub(r"[^A-Z0-9]", "", str(b).upper())
+        if na == nb:
+            matches.append(field)
+        else:
+            mismatches.append(field)
+    if mismatches:
+        status = "MISMATCH"
+    elif matches:
+        status = "MATCH"
+    else:
+        status = "INSUFFICIENT_DATA"
+    return {"status": status, "matches": matches, "mismatches": mismatches}
+
+
+def _detect_qr_data(image):
+    """Optional QR decoding using OpenCV. Failure/absence is neutral."""
+    result = {"status": "NOT_AVAILABLE", "detected": False, "data": None, "source": "opencv_qr_detector"}
+    if not CV2_AVAILABLE:
+        result["status"] = "OPENCV_UNAVAILABLE"
+        return result
+    cv_image = None
+    try:
+        rgb = fix_orientation(image).convert("RGB")
+        arr = np.array(rgb)
+        cv_image = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+        detector = cv2.QRCodeDetector()
+        data, points, _ = detector.detectAndDecode(cv_image)
+        if data:
+            result.update({"status": "DECODED", "detected": True, "data": data})
+        elif points is not None:
+            result.update({"status": "DETECTED_NOT_DECODED", "detected": True})
+        else:
+            result["status"] = "NOT_DETECTED"
+        return result
+    except Exception as exc:
+        result["status"] = "ANALYSIS_UNAVAILABLE"
+        result["error"] = str(exc)[:160]
+        return result
+    finally:
+        if cv_image is not None:
+            del cv_image
+
+
+
+def _compare_qr_with_fields(qr, structured):
+    """Best-effort QR/OCR consistency check. Unknown/opaque QR payloads stay neutral."""
+    qr = qr or {}
+    data = qr.get("data")
+    if not data:
+        return {"status": "NOT_AVAILABLE", "matches": [], "mismatches": [], "source": "qr_field_cross_check"}
+    text = str(data).strip()
+    parsed = {}
+    try:
+        import json
+        obj = json.loads(text)
+        if isinstance(obj, dict):
+            parsed = {str(k).lower().strip(): str(v).strip() for k, v in obj.items() if v is not None}
+    except Exception:
+        pass
+    if not parsed:
+        for part in re.split(r"[|;\n]+", text):
+            if ":" in part or "=" in part:
+                sep = ":" if ":" in part else "="
+                k, v = part.split(sep, 1)
+                if k.strip() and v.strip():
+                    parsed[k.lower().strip()] = v.strip()
+
+    aliases = {
+        "aadhaar_number": ["aadhaar", "aadhar", "aadhaar_number", "uid"],
+        "pan_number": ["pan", "pan_number"],
+        "passport_number": ["passport", "passport_number", "passport_no"],
+        "driving_licence_number": ["dl", "dl_no", "driving_licence", "driving_license"],
+        "voter_id_number": ["epic", "voter", "voter_id"],
+        "gstin": ["gstin", "gst"],
+        "name": ["name", "full_name"],
+        "date_of_birth": ["dob", "date_of_birth", "birth_date"],
+    }
+    matches, mismatches = [], []
+    for field, keys in aliases.items():
+        qr_value = next((parsed[k] for k in parsed if any(a == k or a in k for a in keys)), None)
+        field_value = (structured or {}).get(field)
+        if not qr_value or not field_value:
+            continue
+        a = re.sub(r"[^A-Z0-9]", "", str(qr_value).upper())
+        b = re.sub(r"[^A-Z0-9]", "", str(field_value).upper())
+        if not a or not b:
+            continue
+        if a == b:
+            matches.append(field)
+        elif len(a) >= 4 and len(b) >= 4:
+            mismatches.append(field)
+    if mismatches:
+        status = "MISMATCH"
+    elif matches:
+        status = "MATCH"
+    else:
+        status = "OPAQUE_OR_INSUFFICIENT_DATA"
+    return {"status": status, "matches": matches, "mismatches": mismatches, "source": "qr_field_cross_check"}
+
+def _quality_adjusted_confidence(ocr_confidence, quality):
+    """Only adjusts the displayed reliability metric; raw OCR confidence is preserved."""
+    base = max(0.0, min(100.0, _safe_float(ocr_confidence)))
+    status = (_quality_guidance(quality).get("status") or "GOOD").upper()
+    if status == "POOR":
+        return round(base * 0.82, 1)
+    if status == "FAIR":
+        return round(base * 0.92, 1)
+    return round(base, 1)
+
+
+def _build_enhancement_summary(analysis):
+    structured = analysis.get("structured_data") or {}
+    confidence = analysis.get("field_confidence") or {}
+    raw_text = analysis.get("raw_ocr_text", "") or ""
+    quality = analysis.get("image_quality") or {}
+    return {
+        "field_provenance": _build_field_provenance(structured, confidence, raw_text),
+        "identifier_validation": _validate_identifiers(structured),
+        "quality_guidance": _quality_guidance(quality),
+        "quality_adjusted_ocr_confidence": _quality_adjusted_confidence(analysis.get("ocr_confidence"), quality),
+    }
+
+def _enhanced_risk(file_format_valid, structure_valid, file_size, analysis):
+    """Conservative risk fusion built on top of the original risk calculation."""
+    base = calculate_risk(file_format_valid, structure_valid, file_size, analysis)
+    # Original implementation returns (score, level, signals).
+    if isinstance(base, tuple) and len(base) == 3:
+        score, level, signals = base
+    else:
+        score, level, signals = 0, "LOW RISK", []
+
+    score = _safe_float(score)
+    signals = list(signals or [])
+
+    tampering = analysis.get("tampering_analysis") or {}
+    tamper = _safe_float(tampering.get("tampering_probability", tampering.get("score", 0)))
+    tamper_status = str(tampering.get("status", "")).upper()
+
+    # Weak forensic evidence gets only a small additive contribution.
+    if tamper_status in {"REVIEW_RECOMMENDED", "REVIEW", "POTENTIAL_EDITING_SIGNAL"}:
+        score += min(8, max(0, tamper * 0.12))
+        signals.append("Forensic screening signal requires review")
+    elif tamper_status == "HIGH_REVIEW_REQUIRED":
+        score += min(16, max(4, tamper * 0.18))
+        signals.append("Multiple forensic signals require review")
+
+    category = str(analysis.get("document_category", "UNKNOWN")).upper()
+    detection_conf = str(analysis.get("document_detection_confidence", "LOW")).upper()
+    if category == "UNKNOWN":
+        score = max(score, 21)
+        signals.append("Document type could not be identified confidently")
+    elif detection_conf == "LOW":
+        score = max(score, 11)
+        signals.append("Document type confidence is low")
+
+    # QR absence and face count intentionally do not add risk.
+    mrz_check = analysis.get("passport_mrz_cross_check") or {}
+    if str(mrz_check.get("status", "")).upper() == "MISMATCH":
+        score = max(score, 41)
+        signals.append("Passport MRZ and extracted fields disagree; manual review recommended")
 
     qr = analysis.get("qr_analysis") or {}
-    if qr.get("status") == "DATA_MISMATCH":
-        score += 35
-        signals.append("Decoded QR data is inconsistent with extracted document data")
+    qr_check = analysis.get("qr_field_cross_check") or {}
+    if str(qr_check.get("status", "")).upper() == "MISMATCH" or str(qr.get("status", "")).upper() in {"DATA_MISMATCH", "MISMATCH", "INVALID_DATA"}:
+        score = max(score, 51)
+        signals.append("Decoded QR data conflicts with extracted document data")
 
-    score = min(max(int(round(score)), 0), 100)
-    if score <= 25:
+    score = int(round(min(100, max(0, score))))
+    if score <= 20:
         level = "LOW RISK"
-    elif score <= 60:
+    elif score <= 50:
         level = "MEDIUM RISK"
-    else:
+    elif score <= 75:
         level = "HIGH RISK"
+    else:
+        level = "CRITICAL REVIEW"
     return score, level, signals
 
 
-def build_validation_results(file_format_valid, structure_valid, analysis):
-    results = _base_build_validation_results(file_format_valid, structure_valid, analysis)
-    structured = analysis.get("structured_data") or {}
-    if analysis.get("document_category") == "AADHAAR_CARD":
-        aadhaar = re.sub(r"\D", "", str(structured.get("aadhaar_number") or ""))
-        if len(aadhaar) == 12:
-            results.append({
-                "name": "Aadhaar checksum validation",
-                "status": "PASSED" if is_valid_aadhaar_number(aadhaar) else "FAILED",
-            })
-    face = analysis.get("face_detection") or {}
-    if face.get("status") == "OPENCV_INCOMPATIBLE":
-        results.append({
-            "name": "Face detector runtime",
-            "status": "REVIEW REQUIRED",
-        })
-    return results
-
 # ============================================================
-# HOME
+# FINAL ROUTES — OLD EXTRACTION + SAFE ENHANCEMENTS
 # ============================================================
 
 @app.get("/")
 def home():
-
     return {
-        "message": (
-            "SecureDoc AI Backend is Running!"
-        ),
+        "message": "SecureDoc AI Backend is Running!",
         "status": "online",
-        "version": "5.1.0",
-        "phase": (
-            "Layout-aware multi-pass OCR "
-            "with field-wise consensus extraction"
-        ),
-        "opencv_available": (
-            CV2_AVAILABLE
-        ),
+        "version": APP_VERSION,
+        "phase": "Universal Document Screening + OCR + Multi-Layer Forensics",
+        "opencv_available": CV2_AVAILABLE,
+        "paddleocr_available": PADDLE_AVAILABLE,
     }
 
-
-# ============================================================
-# HEALTH CHECK
-# ============================================================
 
 @app.get("/health")
 def health():
-
     try:
-
-        version = (
-            pytesseract
-            .get_tesseract_version()
-        )
-
+        version = pytesseract.get_tesseract_version()
         tesseract_ready = True
-
     except Exception:
-
         version = None
-
         tesseract_ready = False
-
     return {
         "status": "online",
-        "tesseract_ready": (
-            tesseract_ready
-        ),
-        "tesseract_version": (
-            str(version)
-            if version
-            else None
-        ),
-        "opencv_available": (
-            CV2_AVAILABLE
-        ),
-        "paddleocr_available": (
-            PADDLE_AVAILABLE
-        ),
-        "paddleocr_error": (
-            _PADDLE_ENGINE_ERROR
-        ),
-        "backend_version": "5.1.0",
+        "tesseract_ready": tesseract_ready,
+        "tesseract_version": str(version) if version else None,
+        "opencv_available": CV2_AVAILABLE,
+        "paddleocr_available": PADDLE_AVAILABLE,
+        "paddleocr_error": _PADDLE_ENGINE_ERROR,
+        "backend_version": APP_VERSION,
     }
 
 
-# ============================================================
-# UPLOAD AND ANALYSIS
-# ============================================================
-
 @app.post("/upload")
-async def upload_document(
-    file: UploadFile = File(...)
-):
+async def upload_document(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file selected")
 
-    declared_type = normalize_content_type(
-        file.content_type
-    )
-
-    if (
-        declared_type
-        not in ALLOWED_CONTENT_TYPES
-    ):
-
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Unsupported file type. "
-                "Upload JPG, PNG, WEBP or PDF."
-            ),
-        )
+    declared_type = normalize_content_type(file.content_type)
+    allowed = {normalize_content_type(x) for x in ALLOWED_CONTENT_TYPES}
+    if declared_type not in allowed:
+        raise HTTPException(status_code=400, detail="Unsupported file type. Upload JPG, PNG, WEBP or PDF.")
 
     file_content = await file.read()
-
-    file_size = len(
-        file_content
-    )
-
+    file_size = len(file_content)
     if file_size == 0:
+        raise HTTPException(status_code=400, detail="File is empty.")
+    if file_size > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="File is too large. Maximum allowed size is 10 MB.")
 
-        raise HTTPException(
-            status_code=400,
-            detail="File is empty.",
-        )
+    detected_type = detect_file_signature(file_content)
+    if detected_type == "unknown":
+        raise HTTPException(status_code=400, detail="File signature could not be verified.")
 
-    if (
-        file_size
-        > MAX_FILE_SIZE
-    ):
-
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "File is too large. "
-                "Maximum allowed size is 10 MB."
-            ),
-        )
-
-    detected_type = (
-        detect_file_signature(
-            file_content
-        )
-    )
-
-    if (
-        detected_type
-        == "unknown"
-    ):
-
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "File signature could not be verified."
-            ),
-        )
-
-    file_format_valid = (
-        content_type_matches(
-            declared_type,
-            detected_type,
-        )
-    )
-
-    if detected_type.startswith(
-        "image/"
-    ):
-
-        analysis_data = analyze_image(
-            file_content
-        )
-
-    elif (
-        detected_type
-        == "application/pdf"
-    ):
-
-        analysis_data = analyze_pdf(
-            file_content
-        )
-
+    file_format_valid = content_type_matches(declared_type, detected_type)
+    if detected_type.startswith("image/"):
+        analysis_data = analyze_image(file_content)
+    elif detected_type == "application/pdf":
+        analysis_data = analyze_pdf(file_content)
     else:
+        raise HTTPException(status_code=400, detail="Unsupported detected file type.")
 
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Unsupported detected file type."
-            ),
-        )
+    # Critical rule: enhancement is post-processing. The old OCR result remains
+    # authoritative whenever it already extracted a field successfully.
+    analysis_data = _enhance_analysis_preserving_legacy(file_content, analysis_data)
 
-    structure_valid = bool(
-        analysis_data.get(
-            "valid",
-            False,
-        )
+    structure_valid = bool(analysis_data.get("valid", False))
+    validation_results = build_validation_results(file_format_valid, structure_valid, analysis_data)
+    risk_score, risk_level, risk_signals = _enhanced_risk(
+        file_format_valid, structure_valid, file_size, analysis_data
     )
 
-    validation_results = (
-        build_validation_results(
-            file_format_valid,
-            structure_valid,
-            analysis_data,
-        )
-    )
-
-    risk_score, risk_level, risk_signals = (
-        calculate_risk(
-            file_format_valid,
-            structure_valid,
-            file_size,
-            analysis_data,
-        )
-    )
-
-    anomaly_detected = (
-        risk_score > 25
-    )
-
-    if anomaly_detected:
-
-        anomaly_title = (
-            "Potential Technical Anomalies Detected"
-        )
-
-        anomaly_description = (
-            "One or more OCR, quality or "
-            "file-integrity signals require review. "
-            "This is not proof of document tampering."
-        )
-
+    if risk_score >= 76:
+        decision = "CRITICAL_REVIEW"
+    elif risk_score >= 51:
+        decision = "HIGH_REVIEW"
+    elif risk_score >= 21:
+        decision = "REVIEW"
     else:
+        decision = "LOW_RISK_SCREENING"
 
-        anomaly_title = (
-            "No Critical Technical Anomalies Detected"
-        )
-
-        anomaly_description = (
-            "Available file, OCR and "
-            "technical quality checks completed "
-            "without critical signals."
-        )
-
-    ocr_confidence = float(
-        analysis_data.get(
-            "ocr_confidence",
-            0,
-        )
-        or 0
+    tampering = analysis_data.get("tampering_analysis") or {}
+    anomaly = bool(
+        risk_score >= 21
+        or tampering.get("status") in {"REVIEW_RECOMMENDED", "HIGH_REVIEW_REQUIRED", "REVIEW"}
     )
+    if tampering.get("status") == "HIGH_REVIEW_REQUIRED":
+        anomaly_title = "Multiple Forensic Signals Require Review"
+        anomaly_description = "Multiple technical signals warrant manual forensic review; this is not proof of forgery or AI editing."
+    elif tampering.get("status") in {"REVIEW_RECOMMENDED", "REVIEW"}:
+        anomaly_title = "Forensic Signals Require Review"
+        anomaly_description = "One or more technical forensic signals require manual review."
+    elif anomaly:
+        anomaly_title = "Technical Review Recommended"
+        anomaly_description = "One or more validation, OCR, quality or consistency signals require review."
+    else:
+        anomaly_title = "No Strong Technical Anomaly Detected"
+        anomaly_description = "Available technical checks completed without a strong combined anomaly signal."
 
-    anomaly_confidence = round(
-        min(
-            99,
-            max(
-                50,
-                70
-                + ocr_confidence
-                * 0.25,
-            ),
-        ),
-        0,
-    )
+    ocr_conf = _safe_float(analysis_data.get("ocr_confidence"))
+    tamper_probability = _safe_float(tampering.get("tampering_probability", tampering.get("score", 0)))
+    anomaly_confidence = round(min(99, max(50, 55 + ocr_conf * 0.25 + min(25, tamper_probability * 0.25))), 1)
 
-    file_hash = hashlib.sha256(
-        file_content
-    ).hexdigest()
-
-    category = analysis_data.get(
-        "document_category",
-        "UNKNOWN"
-    )
-
-    validation_status = (
-        "REVIEW"
-        if category == "UNKNOWN"
-        else (
-            "PASSED"
-            if (
-                file_format_valid
-                and structure_valid
-            )
-            else "REVIEW"
-        )
-    )
-
-    # -----------------------------------------------------
-    # FINAL RESPONSE
-    # -----------------------------------------------------
+    face = analysis_data.get("face_detection") or {}
+    qr = analysis_data.get("qr_analysis") or {}
+    structured = analysis_data.get("structured_data") or {}
+    raw_text = analysis_data.get("raw_ocr_text", "") or ""
+    marking_signals = analysis_data.get("document_marking_signals") or detect_demo_or_mockup_signals(raw_text)
 
     return {
         "success": True,
-
-        "message": (
-            "Document uploaded and analyzed successfully"
-        ),
-
+        "message": "Document uploaded and analyzed successfully",
         "document": {
             "filename": file.filename,
             "content_type": declared_type,
             "detected_type": detected_type,
             "file_size": file_size,
-            "sha256": file_hash,
+            "sha256": hashlib.sha256(file_content).hexdigest(),
+            "category": analysis_data.get("document_category", "UNKNOWN"),
+            "label": analysis_data.get("document_label", "Unknown Document"),
+            "detection_confidence": analysis_data.get("document_detection_confidence", "LOW"),
         },
-
+        "ocr": {
+            "text": raw_text,
+            "confidence": ocr_conf,
+            "primary_confidence": analysis_data.get("ocr_confidence_primary", ocr_conf),
+            "recovery_confidence": analysis_data.get("ocr_recovery_confidence", 0),
+            "status": analysis_data.get("ocr_status", "NO_TEXT_DETECTED"),
+            "language": analysis_data.get("ocr_language", "eng"),
+            "engine": analysis_data.get("ocr_engine", "tesseract"),
+            "variant": analysis_data.get("ocr_variant"),
+            "text_regions": analysis_data.get("ocr_tokens", []),
+            "recovery_passes": analysis_data.get("ocr_recovery_passes", []),
+            "raw_confidence": analysis_data.get("ocr_confidence_raw", ocr_conf),
+            "quality_adjusted_confidence": analysis_data.get("ocr_confidence_quality_adjusted", ocr_conf),
+        },
+        "fields": structured,
+        "field_confidence": analysis_data.get("field_confidence", {}),
+        "field_provenance": analysis_data.get("field_provenance", {}),
+        "identifier_validation": analysis_data.get("identifier_validation", {}),
+        "quality_guidance": analysis_data.get("quality_guidance", {}),
+        "passport_mrz": analysis_data.get("passport_mrz", {"detected": False}),
+        "passport_mrz_cross_check": analysis_data.get("passport_mrz_cross_check", {"status": "NOT_APPLICABLE"}),
+        "qr_field_cross_check": analysis_data.get("qr_field_cross_check", {"status": "NOT_AVAILABLE"}),
         "validation": {
-            "status": validation_status,
+            "status": "PASSED" if file_format_valid and structure_valid else "REVIEW",
             "results": validation_results,
         },
-
+        "qr": qr,
+        "qr_verification": qr,
+        "tampering": tampering,
         "analysis_data": analysis_data,
-
+        "face_verification": face,
         "anomaly": {
-            "detected": anomaly_detected,
+            "detected": anomaly,
             "title": anomaly_title,
             "description": anomaly_description,
             "confidence": anomaly_confidence,
         },
-
-        "face_verification": (
-    analysis_data.get(
-        "face_detection",
-        {
-            "available": False,
-            "face_count": 0,
-            "status": "NOT_AVAILABLE",
-            "description": (
-                "Face detection is not available "
-                "for this document."
-            ),
-            "faces": [],
-        },
-    )
-),
-
         "risk_assessment": {
             "score": risk_score,
             "level": risk_level,
+            "decision": decision,
             "signals": risk_signals,
-            "description": (
-                "Risk score is based on file integrity, "
-                "parse success, OCR readability and "
-                "available technical quality signals. "
-                "It is not a legal authenticity verdict."
-            ),
+            "description": "Technical screening score. It is not a legal authenticity verdict or a probability that a document is forged.",
+        },
+        "screening_summary": {
+            "document_type": analysis_data.get("document_label", "Unknown Document"),
+            "document_type_confidence": analysis_data.get("document_detection_confidence", "LOW"),
+            "ocr_confidence": ocr_conf,
+            "tampering_screening_score": tamper_probability,
+            "tampering_status": tampering.get("status", "NO_STRONG_SIGNAL"),
+            "ai_edit_screening": (tampering.get("ai_edit_assessment") or {}).get("status", "NO_STRONG_EDITING_SIGNAL"),
+            "final_decision": decision,
+            "risk_level": risk_level,
+            "document_marking_signals": marking_signals,
+            "extracted_fields": [key for key, value in structured.items() if value and key not in {"document", "document_category"}],
         },
     }
 
+
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run(
-        "main:app",
-        host="127.0.0.1",
-        port=8000,
-        reload=True
-    )
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
