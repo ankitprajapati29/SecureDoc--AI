@@ -103,8 +103,8 @@ MAX_OCR_TEXT_LENGTH = 25000
 
 MAX_PDF_OCR_PAGES = 5
 
-OCR_TARGET_WIDTH = 2000
-OCR_MAX_DIMENSION = 3200
+OCR_TARGET_WIDTH = 1600
+OCR_MAX_DIMENSION = 2400
 
 # ============================================================
 # DOCUMENT LABELS
@@ -3397,28 +3397,36 @@ def extract_ocr_data(image):
     Fast + reliable Tesseract OCR.
 
     Strategy:
-    1. One fast PSM 6 OCR pass for normal documents.
-    2. PSM 11 fallback only when OCR is genuinely weak.
-    3. No unnecessary OCR variants.
-    4. Preserve existing document detection and field extraction.
+    1. Fast standard PSM 6 pass.
+    2. PSM 11 only when the first result is weak/incomplete.
+    3. One enhanced grayscale pass only when both results are weak.
+    4. Select the best/most useful OCR result.
     """
 
     language = get_ocr_language()
     candidates = []
     original_image = None
+    enhanced_image = None
 
     try:
         # --------------------------------------------------------
-        # PREPARE OCR IMAGE
+        # PREPARE ONE NORMAL OCR IMAGE
         # --------------------------------------------------------
-        original_image = fix_orientation(image).convert("RGB")
-        original_image = resize_for_ocr(original_image)
+        original_image = fix_orientation(
+            image
+        ).convert("RGB")
+
+        original_image = resize_for_ocr(
+            original_image
+        )
 
         # --------------------------------------------------------
         # ADD OCR RESULT
         # --------------------------------------------------------
         def add_candidate(result, variant_name, config):
-            text = normalize_text(result.get("text", ""))
+            text = normalize_text(
+                result.get("text", "")
+            )
 
             if not text:
                 return
@@ -3426,24 +3434,28 @@ def extract_ocr_data(image):
             result["variant"] = variant_name
             result["engine"] = "tesseract"
 
-            detection = detect_document_type(text)
+            detection = detect_document_type(
+                text
+            )
 
             structured = extract_fields_from_text(
                 text,
                 detection,
             )
 
-            # OCR quality score
+            # Normal OCR quality score
             score = text_quality_score(
                 text,
                 result.get("confidence", 0),
             )
 
-            # Document type detected
+            # Give extra value to OCR results that
+            # successfully identify a document.
             if detection.get("document_category") != "UNKNOWN":
                 score += 5
 
-            # Important document fields
+            # Give extra value to results containing
+            # important document numbers.
             important_fields = (
                 "aadhaar_number",
                 "pan_number",
@@ -3462,14 +3474,18 @@ def extract_ocr_data(image):
 
             score += found_fields * 8
 
-            result["score"] = round(score, 2)
+            result["score"] = round(
+                score,
+                2,
+            )
+
             result["detection"] = detection
             result["structured"] = structured
 
             candidates.append(result)
 
         # --------------------------------------------------------
-        # PASS 1 — FAST STANDARD OCR
+        # PASS 1 - FAST STANDARD OCR
         # --------------------------------------------------------
         result = run_ocr_pass(
             original_image,
@@ -3493,7 +3509,9 @@ def extract_ocr_data(image):
         )
 
         confidence = (
-            float(best.get("confidence", 0) or 0)
+            float(
+                best.get("confidence", 0) or 0
+            )
             if best
             else 0.0
         )
@@ -3517,20 +3535,37 @@ def extract_ocr_data(image):
             else 0
         )
 
+        important_fields = (
+            "aadhaar_number",
+            "pan_number",
+            "driving_licence_number",
+            "passport_number",
+            "visa_number",
+            "voter_id_number",
+            "gstin",
+        )
+
+        important_field_count = (
+            sum(
+                1
+                for field in important_fields
+                if best.get("structured", {}).get(field)
+            )
+            if best
+            else 0
+        )
+
         # --------------------------------------------------------
-        # FAST FALLBACK DECISION
+        # PASS 2 - PSM 11 ONLY FOR GENUINELY WEAK OCR
         # --------------------------------------------------------
-        #
-        # IMPORTANT:
-        # Do NOT run PSM 11 merely because an important field
-        # was not detected. Field extraction can fail even when
-        # OCR itself is good.
-        #
-        # PSM 11 is used only when the OCR result is actually weak.
-        # --------------------------------------------------------
+        # Keep the common path to one Tesseract pass. This is the
+        # main speed improvement for the Render deployment.
         needs_second_pass = (
             best is None
-            or confidence < 45
+            or confidence < 40
+            or not normalize_text(
+                best.get("text", "")
+            )
             or text_length < 25
         )
 
@@ -3545,6 +3580,61 @@ def extract_ocr_data(image):
                 result,
                 "original_psm11",
                 "--oem 3 --psm 11",
+            )
+
+        # --------------------------------------------------------
+        # CHECK AGAIN
+        # --------------------------------------------------------
+        best = max(
+            candidates,
+            key=lambda item: item.get("score", -999),
+            default=None,
+        )
+
+        confidence = (
+            float(
+                best.get("confidence", 0) or 0
+            )
+            if best
+            else 0.0
+        )
+
+        category = (
+            best.get("detection", {}).get(
+                "document_category",
+                "UNKNOWN",
+            )
+            if best
+            else "UNKNOWN"
+        )
+
+        # --------------------------------------------------------
+        # PASS 3 - ENHANCED OCR ONLY FOR DIFFICULT DOCUMENTS
+        # --------------------------------------------------------
+        needs_enhancement = (
+            best is None
+            or confidence < 30
+            or not normalize_text(
+                best.get("text", "")
+            )
+        )
+
+        if needs_enhancement:
+
+            enhanced_image = create_enhanced_gray(
+                original_image
+            )
+
+            result = run_ocr_pass(
+                enhanced_image,
+                "--oem 3 --psm 6",
+                language,
+            )
+
+            add_candidate(
+                result,
+                "enhanced_gray_psm6",
+                "--oem 3 --psm 6",
             )
 
         # --------------------------------------------------------
@@ -3621,10 +3711,18 @@ def extract_ocr_data(image):
 
         candidate_summary = [
             {
-                "variant": candidate.get("variant"),
-                "engine": candidate.get("engine"),
-                "confidence": candidate.get("confidence"),
-                "score": candidate.get("score"),
+                "variant": candidate.get(
+                    "variant"
+                ),
+                "engine": candidate.get(
+                    "engine"
+                ),
+                "confidence": candidate.get(
+                    "confidence"
+                ),
+                "score": candidate.get(
+                    "score"
+                ),
                 "document": final_detection.get(
                     "document_label"
                 ),
@@ -3636,7 +3734,11 @@ def extract_ocr_data(image):
             "extracted_text": raw_ocr_text,
             "raw_ocr_text": raw_ocr_text,
             "ocr_confidence": float(
-                best.get("confidence", 0) or 0
+                best.get(
+                    "confidence",
+                    0
+                )
+                or 0
             ),
             "ocr_status": (
                 "TEXT_DETECTED"
@@ -3645,12 +3747,17 @@ def extract_ocr_data(image):
             ),
             "ocr_language": language,
             "ocr_engine": "tesseract",
-            "ocr_variant": best.get("variant"),
-            "ocr_candidates_tested": len(candidates),
+            "ocr_variant": best.get(
+                "variant"
+            ),
+            "ocr_candidates_tested": len(
+                candidates
+            ),
             "document_detection": final_detection,
             "structured_data": structured_data,
             "field_confidence": field_confidence,
             "candidate_summary": candidate_summary,
+            "ocr_tokens": best.get("tokens", []),
         }
 
     except Exception as error:
@@ -3667,8 +3774,12 @@ def extract_ocr_data(image):
             "ocr_language": language,
             "ocr_engine": "tesseract",
             "ocr_variant": None,
-            "ocr_candidates_tested": len(candidates),
-            "document_detection": detect_document_type(""),
+            "ocr_candidates_tested": len(
+                candidates
+            ),
+            "document_detection": detect_document_type(
+                ""
+            ),
             "structured_data": {},
             "field_confidence": {},
             "candidate_summary": [],
@@ -3678,7 +3789,14 @@ def extract_ocr_data(image):
         # --------------------------------------------------------
         # FREE MEMORY
         # --------------------------------------------------------
-        safe_close(original_image)
+        safe_close(
+            enhanced_image
+        )
+
+        safe_close(
+            original_image
+        )
+
 # ============================================================
 # DISPLAY TEXT
 # ============================================================
@@ -4260,6 +4378,213 @@ def analyze_image_region_consistency(
     return result
 
 
+# ============================================================
+# LOCAL TEXT REGION TAMPERING ANALYSIS
+# ============================================================
+
+def analyze_text_region_for_tampering(image, x, y, w, h):
+    """
+    Local forensic screening around an OCR-detected text region.
+    This is a supporting signal, NOT proof of forgery.
+    """
+
+    try:
+        import cv2
+        import numpy as np
+
+        if image is None or w <= 2 or h <= 2:
+            return {
+                "suspicious": False,
+                "score": 0.0,
+                "reason": "Invalid text region"
+            }
+
+        # Accept both PIL images and OpenCV/numpy images.
+        if hasattr(image, "convert"):
+            rgb = np.ascontiguousarray(
+                np.asarray(image.convert("RGB"), dtype=np.uint8)
+            )
+            if rgb.ndim == 2:
+                gray_full = rgb
+            else:
+                gray_full = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        else:
+            array = np.ascontiguousarray(image)
+            if array.ndim == 2:
+                gray_full = array
+            else:
+                gray_full = cv2.cvtColor(array, cv2.COLOR_BGR2GRAY)
+
+        height, width = gray_full.shape[:2]
+
+        margin_x = max(4, int(w * 0.35))
+        margin_y = max(4, int(h * 0.60))
+
+        x1 = max(0, int(x) - margin_x)
+        y1 = max(0, int(y) - margin_y)
+        x2 = min(width, int(x) + int(w) + margin_x)
+        y2 = min(height, int(y) + int(h) + margin_y)
+
+        roi = gray_full[y1:y2, x1:x2]
+
+        if roi.size == 0:
+            return {
+                "suspicious": False,
+                "score": 0.0,
+                "reason": "Empty region"
+            }
+
+        blur = cv2.GaussianBlur(roi, (3, 3), 0)
+        noise = cv2.absdiff(roi, blur)
+        noise_std = float(np.std(noise))
+
+        edges = cv2.Canny(roi, 80, 180)
+        edge_density = float(np.mean(edges > 0))
+
+        sharpness = float(cv2.Laplacian(roi, cv2.CV_64F).var())
+
+        signals = []
+
+        if noise_std > 18:
+            signals.append("unusual local noise")
+
+        if edge_density > 0.28:
+            signals.append("unusual local edge density")
+
+        if sharpness > 1800:
+            signals.append("unusual local sharpness")
+
+        suspicious = len(signals) >= 2
+
+        if suspicious:
+            score = min(1.0, 0.30 + 0.15 * len(signals))
+        else:
+            score = min(0.25, 0.08 * len(signals))
+
+        return {
+            "suspicious": suspicious,
+            "score": round(score, 3),
+            "reason": ", ".join(signals) if signals else "No strong local forensic signal",
+            "region": {
+                "x": int(x1),
+                "y": int(y1),
+                "width": int(x2 - x1),
+                "height": int(y2 - y1)
+            },
+            "signals": signals,
+            "metrics": {
+                "noise_std": round(noise_std, 3),
+                "edge_density": round(edge_density, 4),
+                "sharpness": round(sharpness, 2),
+            },
+        }
+
+    except Exception as e:
+        return {
+            "suspicious": False,
+            "score": 0.0,
+            "reason": f"Local analysis unavailable: {str(e)}"
+        }
+
+
+def analyze_targeted_text_regions(image, ocr_tokens, structured):
+    """
+    Run local forensic checks only on OCR regions belonging to
+    important extracted fields. This keeps the signal focused on
+    likely editable fields such as name, DOB and document number.
+    """
+
+    result = {
+        "available": False,
+        "suspicious": False,
+        "suspicious_fields": [],
+        "regions": [],
+        "region_count": 0,
+    }
+
+    if not CV2_AVAILABLE or image is None:
+        return result
+
+    tokens = [
+        token for token in (ocr_tokens or [])
+        if isinstance(token, dict)
+        and token.get("text")
+        and int(token.get("width", 0) or 0) > 2
+        and int(token.get("height", 0) or 0) > 2
+    ]
+
+    if not tokens:
+        return result
+
+    # Only fields whose visual text is useful for targeted tamper screening.
+    target_fields = [
+        "name",
+        "date_of_birth",
+        "aadhaar_number",
+        "pan_number",
+        "driving_licence_number",
+        "passport_number",
+        "voter_id_number",
+        "gstin",
+    ]
+
+    def norm(value):
+        return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+    def token_matches_field(token_text, field_value):
+        token_norm = norm(token_text)
+        value_norm = norm(field_value)
+        if not token_norm or not value_norm:
+            return False
+        if token_norm in value_norm or value_norm in token_norm:
+            return True
+        # Match meaningful words inside a multi-word name.
+        parts = [part for part in re.findall(r"[a-z0-9]+", str(field_value).lower()) if len(part) >= 3]
+        return any(part == token_norm for part in parts)
+
+    for field in target_fields:
+        value = structured.get(field)
+        if not value:
+            continue
+
+        matching = [
+            token for token in tokens
+            if token_matches_field(token.get("text", ""), value)
+        ]
+
+        if not matching:
+            continue
+
+        # Limit repeated OCR fragments so one field cannot dominate the score.
+        matching = matching[:6]
+
+        for token in matching:
+            analysis = analyze_text_region_for_tampering(
+                image,
+                int(token.get("left", 0) or 0),
+                int(token.get("top", 0) or 0),
+                int(token.get("width", 0) or 0),
+                int(token.get("height", 0) or 0),
+            )
+
+            region_entry = {
+                "field": field,
+                "text": str(token.get("text", "")),
+                "confidence": float(token.get("confidence", 0) or 0),
+                **analysis,
+            }
+            result["regions"].append(region_entry)
+
+            if analysis.get("suspicious"):
+                result["suspicious"] = True
+                if field not in result["suspicious_fields"]:
+                    result["suspicious_fields"].append(field)
+
+    result["available"] = bool(result["regions"])
+    result["region_count"] = len(result["regions"])
+    return result
+
+
 def analyze_document_tampering(
     image,
     metadata,
@@ -4763,6 +5088,13 @@ def analyze_image(
                 )
             ),
 
+            "ocr_tokens": (
+                ocr.get(
+                    "ocr_tokens",
+                    []
+                )
+            ),
+
             "extracted_characters": len(
                 raw_text
             ),
@@ -4895,8 +5227,8 @@ def analyze_pdf(
 
             pix = page.get_pixmap(
                 matrix=fitz.Matrix(
-                    2.5,
-                    2.5,
+                    1.8,
+                    1.8,
                 ),
                 alpha=False,
             )
@@ -5593,6 +5925,18 @@ def analyze_image(file_content):
             image,
             data.get("structured_data") or {},
         )
+
+        # OCR runs on the same orientation/resizing pipeline. Recreate
+        # that OCR image so its token coordinates match the forensic ROI.
+        ocr_image = resize_for_ocr(
+            fix_orientation(image).convert("RGB")
+        )
+        data["text_region_tampering"] = analyze_targeted_text_regions(
+            ocr_image,
+            data.get("ocr_tokens") or [],
+            data.get("structured_data") or {},
+        )
+        safe_close(ocr_image)
         safe_close(image)
     except Exception as error:
         data["forensic_error"] = str(error)
@@ -5636,20 +5980,6 @@ def calculate_risk(file_format_valid, structure_valid, file_size, analysis):
 
     category = analysis.get("document_category", "UNKNOWN")
     structured = analysis.get("structured_data") or {}
-
-    # UNKNOWN DOCUMENT RISK
-    if category == "UNKNOWN":
-        score += 50
-        signals.append(
-            "Document type could not be identified reliably"
-        )
-
-        if not structured:
-            score += 30
-            signals.append(
-                "No reliable structured document data extracted"
-            )
-
     if category == "AADHAAR_CARD":
         aadhaar = re.sub(r"\D", "", str(structured.get("aadhaar_number") or ""))
         if len(aadhaar) == 12:
@@ -5682,6 +6012,27 @@ def calculate_risk(file_format_valid, structure_valid, file_size, analysis):
         score += 35
         signals.append("Decoded QR data is inconsistent with extracted document data")
 
+    text_region = analysis.get("text_region_tampering") or {}
+    suspicious_fields = text_region.get("suspicious_fields") or []
+    if suspicious_fields:
+        score += min(25, 10 + len(suspicious_fields) * 5)
+        field_labels = {
+            "name": "name",
+            "date_of_birth": "date of birth",
+            "aadhaar_number": "Aadhaar number",
+            "pan_number": "PAN number",
+            "driving_licence_number": "driving licence number",
+            "passport_number": "passport number",
+            "voter_id_number": "voter ID number",
+            "gstin": "GSTIN",
+        }
+        readable = [field_labels.get(field, field) for field in suspicious_fields]
+        signals.append(
+            "Local forensic variation detected around "
+            + ", ".join(readable)
+            + "; manual review recommended"
+        )
+
     score = min(max(int(round(score)), 0), 100)
     if score <= 25:
         level = "LOW RISK"
@@ -5708,6 +6059,19 @@ def build_validation_results(file_format_valid, structure_valid, analysis):
             "name": "Face detector runtime",
             "status": "REVIEW REQUIRED",
         })
+
+    text_region = analysis.get("text_region_tampering") or {}
+    if text_region.get("suspicious_fields"):
+        results.append({
+            "name": "Targeted text-region forensic screening",
+            "status": "REVIEW REQUIRED",
+        })
+    else:
+        results.append({
+            "name": "Targeted text-region forensic screening",
+            "status": "NO STRONG SIGNAL",
+        })
+
     return results
 
 # ============================================================
@@ -5958,25 +6322,16 @@ async def upload_document(
         file_content
     ).hexdigest()
 
-    category = analysis_data.get(
-        "document_category",
-        "UNKNOWN"
-    )
-
     validation_status = (
-        "REVIEW"
-        if category == "UNKNOWN"
-        else (
-            "PASSED"
-            if (
-                file_format_valid
-                and structure_valid
-            )
-            else "REVIEW"
+        "PASSED"
+        if (
+            file_format_valid
+            and structure_valid
         )
+        else "REVIEW"
     )
 
-    # -----------------------------------------------------
+        # -----------------------------------------------------
     # FINAL RESPONSE
     # -----------------------------------------------------
 
