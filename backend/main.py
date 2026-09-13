@@ -7962,26 +7962,18 @@ def analyze_document_tampering(image, metadata, ocr_tokens=None, structured=None
 
     score = round(min(100.0, max(0.0, raw_score)), 1)
 
-    if len(strongish) >= 2 and score >= 30:
-        level = "MEDIUM"
-        status = "REVIEW_RECOMMENDED"
-    elif len(strongish) >= 2 and score >= 50:
-        level = "HIGH"
-        status = "HIGH_REVIEW_REQUIRED"
-    elif score >= 18 and len(strongish) >= 1:
-        level = "LOW-MEDIUM"
-        status = "REVIEW_RECOMMENDED"
-    else:
-        level = "LOW"
-        status = "NO_STRONG_SIGNAL"
-
-    # Correct ordering for high threshold after combined evidence.
     if len(strongish) >= 2 and score >= 50:
         level = "HIGH"
         status = "HIGH_REVIEW_REQUIRED"
     elif len(strongish) >= 2 and score >= 30:
         level = "MEDIUM"
         status = "REVIEW_RECOMMENDED"
+    elif score >= 18 and len(strongish) >= 1:
+        level = "LOW-MEDIUM"
+        status = "REVIEW_RECOMMENDED"
+    else:
+        level = "LOW"
+        status = "NO_STRONG_SIGNAL"
 
     if score < 18:
         ai_status = "NO_STRONG_EDITING_SIGNAL"
@@ -8287,6 +8279,9 @@ def build_validation_results(file_format_valid, structure_valid, analysis):
 # ============================================================
 # FINAL OCR IDENTIFIER RECOVERY OVERRIDE
 # ============================================================
+# PaddleOCR remains optional/fallback here. Tesseract is kept as the
+# primary compatibility path because the existing project depends on its
+# bilingual OCR and layout tokens.
 def _targeted_identifier_ocr(image):
     """Fast identifier recovery for small numbers near the lower document edge."""
     results = []
