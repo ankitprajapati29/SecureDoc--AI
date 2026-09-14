@@ -1628,131 +1628,156 @@ Waiting for OCR analysis...</pre>
 
 
     /* =====================================================
-       TAMPERING / ANOMALY
-    ====================================================== */
+   TAMPERING / ANOMALY
+====================================================== */
 
-    function renderTampering(
-        data
-    ) {
+function renderTampering(
+    data
+) {
 
-        const {
-            tampering
-        } = data;
-
-
-        const rawStatus =
-            cleanValue(
-
-                tampering.status ||
-
-                tampering.result
-
-            );
+    const {
+        tampering
+    } = data;
 
 
-        const detected =
-            tampering.detected === true;
+    const rawStatus =
+        cleanValue(
 
+            tampering.status ||
 
-        const normalizedStatus =
-            rawStatus
-                ? normalizeStatus(
-                    rawStatus,
-                    "REVIEW REQUIRED"
-                )
-                : (
-                    detected
-                        ? "CRITICAL"
-                        : "NO CRITICAL SIGNAL"
-                );
+            tampering.result
 
-
-        const title =
-            cleanValue(
-                tampering.title
-            ) ||
-            (
-                normalizedStatus ===
-                "CRITICAL"
-
-                    ? "Potential Critical Anomaly Detected"
-
-                    : normalizedStatus ===
-                      "REVIEW REQUIRED"
-
-                        ? "Document Signals Require Review"
-
-                        : "No Critical Anomalies Detected"
-            );
-
-
-        const description =
-            cleanValue(
-
-                tampering.description ||
-
-                tampering.message ||
-
-                tampering.details
-
-            ) ||
-            (
-                normalizedStatus ===
-                "CRITICAL"
-
-                    ? "Critical document anomaly signals were detected and require manual review."
-
-                    : normalizedStatus ===
-                      "REVIEW REQUIRED"
-
-                        ? "Some document signals require additional review."
-
-                        : "No critical tampering signals were detected."
-            );
-
-
-        const confidence =
-            Number(
-                tampering.confidence || 0
-            );
-
-
-        if (tamperingBadge) {
-
-            tamperingBadge.textContent =
-                normalizedStatus;
-
-
-            setStatusStyle(
-                tamperingBadge,
-                normalizedStatus
-            );
-        }
-
-
-        setText(
-            tamperingTitle,
-            title
         );
 
 
-        setText(
-            tamperingDescription,
-            description
+    const detected =
+        tampering.detected === true;
+
+
+    /*
+       FINAL STATUS LOGIC
+
+       CRITICAL
+       -> Actual critical status/result
+
+       REVIEW REQUIRED
+       -> Non-critical technical anomaly
+          / warning / low-level issue
+
+       NO CRITICAL SIGNAL
+       -> No critical anomaly detected
+    */
+
+    const normalizedStatus =
+        rawStatus
+            ? normalizeStatus(
+                rawStatus,
+                "NO CRITICAL SIGNAL"
+            )
+            : "NO CRITICAL SIGNAL";
+
+
+    /*
+       TITLE
+    */
+
+    const title =
+        (
+            normalizedStatus ===
+            "CRITICAL"
+
+                ? "Potential Critical Anomaly Detected"
+
+                : normalizedStatus ===
+                  "REVIEW REQUIRED"
+
+                    ? "Potential Technical Anomalies Detected"
+
+                    : "No Critical Anomalies Detected"
         );
 
 
-        if (tamperingConfidence) {
+    /*
+       DESCRIPTION
+    */
 
-            tamperingConfidence.textContent =
-                confidence > 0
+    const description =
+        (
+            normalizedStatus ===
+            "CRITICAL"
 
-                    ? `${Math.round(confidence)}%`
+                ? "Critical document anomaly signals were detected and require manual review."
 
-                    : "—";
-        }
+                : normalizedStatus ===
+                  "REVIEW REQUIRED"
+
+                    ? "One or more OCR, quality or file-integrity signals require review."
+
+                    : "No critical tampering signals were detected."
+        );
+
+
+    /*
+       CONFIDENCE
+    */
+
+    const confidence =
+        Number(
+            tampering.confidence || 0
+        );
+
+
+    /*
+       STATUS BADGE
+    */
+
+    if (tamperingBadge) {
+
+        tamperingBadge.textContent =
+            normalizedStatus;
+
+
+        setStatusStyle(
+            tamperingBadge,
+            normalizedStatus
+        );
     }
 
+
+    /*
+       TITLE
+    */
+
+    setText(
+        tamperingTitle,
+        title
+    );
+
+
+    /*
+       DESCRIPTION
+    */
+
+    setText(
+        tamperingDescription,
+        description
+    );
+
+
+    /*
+       CONFIDENCE
+    */
+
+    if (tamperingConfidence) {
+
+        tamperingConfidence.textContent =
+            confidence > 0
+
+                ? `${Math.round(confidence)}%`
+
+                : "—";
+    }
+}
 
 /* =====================================================
    QR VERIFICATION
