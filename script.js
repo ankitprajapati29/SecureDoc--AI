@@ -1460,324 +1460,299 @@ Waiting for OCR analysis...</pre>
 
 
     function renderValidation(
-    data
-) {
+        data
+    ) {
 
-    const validation =
-        data.validation || {};
-
-
-    const items =
-        getValidationItems(
-            data
-        );
+        const {
+            validation
+        } = data;
 
 
-    /*
-       RENDER INDIVIDUAL
-       VALIDATION CHECKS
-    */
+        const items =
+            getValidationItems(
+                data
+            );
 
-    if (validationList) {
 
-        validationList.innerHTML =
-            "";
+        if (validationList) {
 
-        items.forEach(item => {
+            validationList.innerHTML =
+                "";
 
-            const row =
-                document.createElement(
-                    "div"
+
+            items.forEach(item => {
+
+                const row =
+                    document.createElement(
+                        "div"
+                    );
+
+
+                row.className =
+                    "validation-item";
+
+
+                const label =
+                    document.createElement(
+                        "span"
+                    );
+
+
+                const status =
+                    document.createElement(
+                        "strong"
+                    );
+
+
+                label.textContent =
+                    item.label;
+
+
+                status.textContent =
+                    item.status;
+
+
+                setStatusStyle(
+                    status,
+                    item.status
                 );
 
-            row.className =
-                "validation-item";
 
-
-            const label =
-                document.createElement(
-                    "span"
-                );
-
-            const status =
-                document.createElement(
-                    "strong"
+                row.appendChild(
+                    label
                 );
 
 
-            label.textContent =
-                item.label;
+                row.appendChild(
+                    status
+                );
 
-            status.textContent =
-                item.status;
+
+                validationList.appendChild(
+                    row
+                );
+            });
+        }
+
+
+        /*
+           BACKEND OVERALL STATUS
+           IS PREFERRED
+        */
+
+        let finalStatus =
+            normalizeStatus(
+
+                validation.status ||
+
+                validation.overall_status,
+
+                ""
+
+            );
+
+
+        /*
+           IF BACKEND DID NOT SEND
+           OVERALL STATUS
+        */
+
+        if (!finalStatus) {
+
+            const hasCritical =
+                items.some(
+                    item =>
+                        item.status ===
+                        "CRITICAL"
+                );
+
+
+            const hasInvalid =
+                items.some(
+                    item =>
+                        item.status ===
+                        "INVALID"
+                );
+
+
+            const hasReview =
+                items.some(
+                    item =>
+                        item.status ===
+                        "REVIEW REQUIRED"
+                );
+
+
+            if (hasCritical) {
+
+                finalStatus =
+                    "CRITICAL";
+
+            } else if (hasInvalid) {
+
+                finalStatus =
+                    "INVALID";
+
+            } else if (hasReview) {
+
+                finalStatus =
+                    "REVIEW REQUIRED";
+
+            } else {
+
+                finalStatus =
+                    "VALID";
+            }
+
+        } else if (
+            finalStatus === "PASSED"
+        ) {
+
+            finalStatus =
+                "VALID";
+        }
+
+
+        if (validationBadge) {
+
+            validationBadge.textContent =
+                finalStatus;
 
 
             setStatusStyle(
-                status,
-                item.status
+                validationBadge,
+                finalStatus
             );
-
-
-            row.appendChild(
-                label
-            );
-
-            row.appendChild(
-                status
-            );
-
-
-            validationList.appendChild(
-                row
-            );
-        });
+        }
     }
 
 
-    /*
-       OVERALL VALIDATION STATUS
+    /* =====================================================
+       TAMPERING / ANOMALY
+    ====================================================== */
 
-       Priority:
+    function renderTampering(
+        data
+    ) {
 
-       CRITICAL
-          ↓
-       INVALID
-          ↓
-       REVIEW REQUIRED
-          ↓
-       VALID
+        const {
+            tampering
+        } = data;
 
-       Individual checks have
-       priority over backend
-       summary status.
-    */
 
-    const hasCritical =
-        items.some(
-            item =>
-                item.status ===
+        const rawStatus =
+            cleanValue(
+
+                tampering.status ||
+
+                tampering.result
+
+            );
+
+
+        const detected =
+            tampering.detected === true;
+
+
+        const normalizedStatus =
+            rawStatus
+                ? normalizeStatus(
+                    rawStatus,
+                    "REVIEW REQUIRED"
+                )
+                : (
+                    detected
+                        ? "CRITICAL"
+                        : "NO CRITICAL SIGNAL"
+                );
+
+
+        const title =
+            cleanValue(
+                tampering.title
+            ) ||
+            (
+                normalizedStatus ===
                 "CRITICAL"
+
+                    ? "Potential Critical Anomaly Detected"
+
+                    : normalizedStatus ===
+                      "REVIEW REQUIRED"
+
+                        ? "Document Signals Require Review"
+
+                        : "No Critical Anomalies Detected"
+            );
+
+
+        const description =
+            cleanValue(
+
+                tampering.description ||
+
+                tampering.message ||
+
+                tampering.details
+
+            ) ||
+            (
+                normalizedStatus ===
+                "CRITICAL"
+
+                    ? "Critical document anomaly signals were detected and require manual review."
+
+                    : normalizedStatus ===
+                      "REVIEW REQUIRED"
+
+                        ? "Some document signals require additional review."
+
+                        : "No critical tampering signals were detected."
+            );
+
+
+        const confidence =
+            Number(
+                tampering.confidence || 0
+            );
+
+
+        if (tamperingBadge) {
+
+            tamperingBadge.textContent =
+                normalizedStatus;
+
+
+            setStatusStyle(
+                tamperingBadge,
+                normalizedStatus
+            );
+        }
+
+
+        setText(
+            tamperingTitle,
+            title
         );
 
 
-    const hasInvalid =
-        items.some(
-            item =>
-                item.status ===
-                "INVALID"
+        setText(
+            tamperingDescription,
+            description
         );
 
 
-    const hasReview =
-        items.some(
-            item =>
-                item.status ===
-                "REVIEW REQUIRED"
-        );
+        if (tamperingConfidence) {
 
+            tamperingConfidence.textContent =
+                confidence > 0
 
-    let finalStatus =
-        "VALID";
+                    ? `${Math.round(confidence)}%`
 
-
-    if (hasCritical) {
-
-        finalStatus =
-            "CRITICAL";
-
-    }
-    else if (hasInvalid) {
-
-        finalStatus =
-            "INVALID";
-
-    }
-    else if (hasReview) {
-
-        finalStatus =
-            "REVIEW REQUIRED";
+                    : "—";
+        }
     }
 
-
-    /*
-       FINAL BADGE
-    */
-
-    if (validationBadge) {
-
-        validationBadge.textContent =
-            finalStatus;
-
-        setStatusStyle(
-            validationBadge,
-            finalStatus
-        );
-    }
-}
-
-   function renderTampering(
-    data
-) {
-
-    const tampering =
-        data.tampering || {};
-
-    /*
-       Read the explicit backend severity.
-       Do NOT make detected=true automatically CRITICAL.
-    */
-
-    const rawStatus =
-        cleanValue(
-            tampering.status ||
-            tampering.result
-        );
-
-
-    /*
-       FINAL STATUS
-
-       CRITICAL
-       -> backend explicitly reports CRITICAL
-
-       REVIEW REQUIRED
-       -> technical / non-critical anomaly
-
-       NO CRITICAL SIGNAL
-       -> no critical tampering signal
-    */
-
-    const normalizedStatus =
-        rawStatus
-            ? normalizeStatus(
-                rawStatus,
-                "NO CRITICAL SIGNAL"
-            )
-            : "NO CRITICAL SIGNAL";
-
-
-    /*
-       TITLE
-
-       Keep title consistent with
-       the final status.
-    */
-
-    let title;
-
-    if (
-        normalizedStatus ===
-        "CRITICAL"
-    ) {
-
-        title =
-            "Potential Critical Anomaly Detected";
-
-    }
-    else if (
-        normalizedStatus ===
-        "REVIEW REQUIRED"
-    ) {
-
-        title =
-            "Potential Technical Anomalies Detected";
-
-    }
-    else {
-
-        title =
-            "No Critical Anomalies Detected";
-    }
-
-
-    /*
-       DESCRIPTION
-
-       Keep description consistent
-       with the final status.
-    */
-
-    let description;
-
-    if (
-        normalizedStatus ===
-        "CRITICAL"
-    ) {
-
-        description =
-            "Critical document anomaly signals were detected and require manual review.";
-
-    }
-    else if (
-        normalizedStatus ===
-        "REVIEW REQUIRED"
-    ) {
-
-        description =
-            "One or more OCR, quality or file-integrity signals require review.";
-
-    }
-    else {
-
-        description =
-            "No critical tampering signals were detected.";
-    }
-
-
-    /*
-       STATUS BADGE
-    */
-
-    if (tamperingBadge) {
-
-        tamperingBadge.textContent =
-            normalizedStatus;
-
-        setStatusStyle(
-            tamperingBadge,
-            normalizedStatus
-        );
-    }
-
-
-    /*
-       TITLE
-    */
-
-    setText(
-        tamperingTitle,
-        title
-    );
-
-
-    /*
-       DESCRIPTION
-    */
-
-    setText(
-        tamperingDescription,
-        description
-    );
-
-
-    /*
-       CONFIDENCE
-    */
-
-    const confidence =
-        Number(
-            tampering.confidence || 0
-        );
-
-
-    if (tamperingConfidence) {
-
-        tamperingConfidence.textContent =
-            confidence > 0
-                ? `${Math.round(confidence)}%`
-                : "—";
-    }
-}
 
 /* =====================================================
    QR VERIFICATION
@@ -2567,45 +2542,31 @@ else if (!level) {
     */
 
     const tampering =
-    data.tampering || {};
+        data.tampering || {};
 
-let tamperingStatus =
-    "NO CRITICAL SIGNAL";
+    let tamperingStatus =
+    "LOW";
 
 const normalizedTamperingStatus =
     normalizeStatus(
         tampering.status ||
         tampering.result ||
         "",
-        "NO CRITICAL SIGNAL"
+        tampering.detected === true
+            ? "CRITICAL"
+            : "LOW"
     );
 
-
 if (
-    normalizedTamperingStatus ===
-    "CRITICAL"
+    normalizedTamperingStatus === "CRITICAL" ||
+    tampering.detected === true ||
+    signalContains("tampering") ||
+    signalContains("editing-software") ||
+    signalContains("recompression") ||
+    signalContains("inconsistent image")
 ) {
-
     tamperingStatus =
         "CRITICAL";
-
-}
-else if (
-    normalizedTamperingStatus ===
-    "REVIEW REQUIRED" ||
-
-    normalizedTamperingStatus ===
-    "LOW"
-) {
-
-    tamperingStatus =
-        "REVIEW REQUIRED";
-
-}
-else {
-
-    tamperingStatus =
-        "NO CRITICAL SIGNAL";
 }
 
 
