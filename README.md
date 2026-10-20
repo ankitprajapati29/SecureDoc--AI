@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://ankitprajapati29.github.io/SecureDoc--AI/">
-    <strong>🚀 Live Demo</strong>
+    <strong>🚀 Live </strong>
   </a>
   |
   <a href="https://github.com/ankitprajapati29">
