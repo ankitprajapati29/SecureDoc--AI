@@ -278,8 +278,6 @@ Potential improvements include:
 
 **Ankit Prajapati**
 
-B.Tech Computer Science and Engineering Student
-
 - GitHub: https://github.com/ankitprajapati29
 - Live Demo: https://ankitprajapati29.github.io/SecureDoc--AI/
 
